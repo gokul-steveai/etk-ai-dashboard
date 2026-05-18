@@ -15,7 +15,8 @@ from jose import jwt, JWTError
 from auth import SECRET_KEY, ALGORITHM, GOOGLE_CLIENT_ID
 from fastapi.exceptions import RequestValidationError
 from schemas import (
-    GoogleTokenData,
+    AuthTokenData,
+    LinkedInAuthRequest,
     ProfileData,
     UserLogin,
     BaseResponse,
@@ -30,6 +31,7 @@ from schemas import (
 from models import User, Base, CompanyProfile
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+import requests
 
 Base.metadata.create_all(bind=engine)
 
@@ -276,30 +278,66 @@ def create_company_profile(data: CompanyProfileCreate, db: Session = Depends(get
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def handle_oauth_user_provisioning(
+    db: Session, email: str
+) -> BaseResponse[AuthTokenData]:
+    """
+    DRY Helper: Resolves an OAuth user by email, registers them if missing,
+    generates a system JWT access token, and returns a unified response envelope.
+    """
+    # 1. Fetch or provision the user on-the-fly
+    user = find_user_by_email(db, email)
+
+    if not user:
+        user = models.User(
+            id=str(uuid4()),
+            email=email,
+            password=None,  # Explicitly NULL for passwordless OAuth accounts
+            otp=None,
+            otp_expiry=None,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # 2. Issue our standard system-wide access token
+    backend_access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id}
+    )
+
+    # 3. Return the fully typed, unified response envelope
+    return BaseResponse(
+        success=True,
+        message="Authentication successful",
+        data=AuthTokenData(
+            access_token=backend_access_token,
+            token_type="bearer",
+            user=UserData(id=str(user.id), email=user.email),
+        ),
+    )
+
+
 @app.post(
-    "/auth/google",
-    response_model=BaseResponse[GoogleTokenData],
+    "/google",
+    response_model=BaseResponse[AuthTokenData],
     status_code=status.HTTP_200_OK,
 )
 def google_authentication(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
     """
     Receives the Google id_token from the frontend, validates it against Google,
-    provisions/fetches the user details, and returns our own backend JWT.
+    and delegates user provisioning and token generation to the shared authentication layer.
     """
-    id_token_str = payload.id_token
-    if not id_token_str:
+    if not payload.id_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing Google ID token in request payload.",
         )
 
     try:
-        # Validate the token using Google's official verification library
         id_info = id_token.verify_oauth2_token(
-            id_token_str, google_requests.Request(), GOOGLE_CLIENT_ID
+            payload.id_token, google_requests.Request(), GOOGLE_CLIENT_ID
         )
 
-        # Safely extract user identifiers verified by Google
         email = id_info.get("email")
         if not email:
             raise HTTPException(
@@ -308,38 +346,60 @@ def google_authentication(payload: GoogleAuthRequest, db: Session = Depends(get_
             )
 
     except ValueError as e:
-        # Raised if the token is expired, tampered with, or invalid
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_41_UNAUTHORIZED,
             detail=f"Invalid Google credentials: {str(e)}",
         )
 
-    # Search for user in user's table
-    user = find_user_by_email(db, email)
+    return handle_oauth_user_provisioning(db, email)
 
-    # If user doesn't exist, register them as a password less account on-the-fly
-    if not user:
-        user = User(
-            id=str(uuid4()),
-            email=email,
-            password=None,  # Explicitly NULL for Google-only users
-            otp=None,
-            otp_expiry=None,
+
+@app.post(
+    "/linkedin",
+    response_model=BaseResponse[AuthTokenData],
+    status_code=status.HTTP_200_OK,
+)
+def linkedin_authentication(
+    payload: LinkedInAuthRequest, db: Session = Depends(get_db)
+):
+    """
+    Receives the LinkedIn access_token from the frontend, validates it against
+    LinkedIn's UserInfo API, and delegates user provisioning to the shared authentication layer.
+    """
+    if not payload.access_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing LinkedIn access token in request payload.",
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
 
-    # Issue our system-wide standard access token
-    backend_access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id}
-    )
+    try:
+        headers = {"Authorization": f"Bearer {payload.access_token}"}
+        response = requests.get("https://api.linkedin.com/v2/userinfo", headers=headers)
 
-    return {
-        "access_token": backend_access_token,
-        "token_type": "bearer",
-        "user": {"id": user.id, "email": user.email},
-    }
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_41_UNAUTHORIZED,
+                detail="Failed to verify token with LinkedIn or token has expired.",
+            )
+
+        user_info = response.json()
+        email = user_info.get("email")
+
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="LinkedIn profile does not contain a verified email address.",
+            )
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=status.HTTP_41_UNAUTHORIZED,
+            detail=f"LinkedIn authentication failed: {str(e)}",
+        )
+
+    return handle_oauth_user_provisioning(db, email)
 
 
 @app.get(
