@@ -20,14 +20,13 @@ from jose import jwt, JWTError
 from auth import SECRET_KEY, ALGORITHM, GOOGLE_CLIENT_ID
 from schemas import (
     BaseResponse,
-    AuthTokenData,
     ForgotPassword,
     GoogleAuthRequest,
     LinkedInAuthRequest,
     ResetPassword,
     UserCreate,
     UserLogin,
-    TokenData,
+    TokenResponse,
     ProfileData,
     CompanyProfileCreate,
     UserData,
@@ -107,7 +106,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.post(
     "/signup",
-    response_model=BaseResponse[TokenData],
+    response_model=BaseResponse[TokenResponse],
     status_code=status.HTTP_200_OK,
 )
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
@@ -126,15 +125,18 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     return BaseResponse(
         success=True,
         message="User created successfully",
-        data=TokenData(
-            user_id=str(new_user.id), access_token=token, token_type="bearer"
+        data=TokenResponse(
+            user_id=str(new_user.id),
+            access_token=token,
+            token_type="bearer",
+            email=user.email,
         ),
     )
 
 
 @app.post(
     "/login",
-    response_model=BaseResponse[TokenData],
+    response_model=BaseResponse[TokenResponse],
     status_code=status.HTTP_200_OK,
 )
 async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
@@ -148,8 +150,11 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
     return BaseResponse(
         success=True,
         message="Login successful",
-        data=TokenData(
-            user_id=str(db_user.id), access_token=token, token_type="bearer"
+        data=TokenResponse(
+            user_id=str(db_user.id),
+            access_token=token,
+            token_type="bearer",
+            email=user.email,
         ),
     )
 
@@ -208,7 +213,8 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
     status_code=status.HTTP_201_CREATED,
 )
 async def create_company_profile(
-    data: CompanyProfileCreate, db: AsyncSession = Depends(get_db)
+    data: CompanyProfileCreate,
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         profile_data = {
@@ -275,7 +281,7 @@ async def create_company_profile(
 
 async def handle_oauth_user_provisioning(
     db: AsyncSession, email: str
-) -> BaseResponse[AuthTokenData]:
+) -> BaseResponse[TokenResponse]:
     """
     Resolves an OAuth user by email, registers them if missing,
     generates a system JWT access token.
@@ -291,23 +297,19 @@ async def handle_oauth_user_provisioning(
         await db.commit()
         await db.refresh(user)
 
-    backend_access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id}
-    )
+    token = create_access_token(data={"sub": user.email, "user_id": user.id})
     return BaseResponse(
         success=True,
         message="Authentication successful",
-        data=AuthTokenData(
-            access_token=backend_access_token,
-            token_type="bearer",
-            user=UserData(id=str(user.id), email=user.email),
+        data=TokenResponse(
+            user_id=str(user.id), access_token=token, token_type="bearer", email=email
         ),
     )
 
 
 @app.post(
     "/auth/google",
-    response_model=BaseResponse[AuthTokenData],
+    response_model=BaseResponse[TokenResponse],
     status_code=status.HTTP_200_OK,
 )
 async def google_authentication(
@@ -339,7 +341,7 @@ async def google_authentication(
 
 @app.post(
     "/auth/linkedin",
-    response_model=BaseResponse[AuthTokenData],
+    response_model=BaseResponse[TokenResponse],
     status_code=status.HTTP_200_OK,
 )
 async def linkedin_authentication(

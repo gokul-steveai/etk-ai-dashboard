@@ -43,16 +43,18 @@ class GoogleAuthRequest(BaseModel):
             "example": {"id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImU0N..."}
         }
 
+
 class LinkedInAuthRequest(BaseModel):
     """Request payload for LinkedIn login."""
+
     access_token: str = Field(
-        ..., description="The access token returned by NextAuth/Auth.js from the LinkedIn provider"
+        ...,
+        description="The access token returned by NextAuth/Auth.js from the LinkedIn provider",
     )
 
     class Config:
-        json_schema_extra = {
-            "example": {"access_token": "AQX4_abc123XYZ..."}
-        }
+        json_schema_extra = {"example": {"access_token": "AQX4_abc123XYZ..."}}
+
 
 class BaseResponse(BaseModel, Generic[T]):
     """Standardized top-level API envelope structure for all responses."""
@@ -62,21 +64,15 @@ class BaseResponse(BaseModel, Generic[T]):
     data: Optional[T] = None
 
 
-class TokenData(BaseModel):
-    user_id: str
-    access_token: str
-    token_type: str = "bearer"
-
-
 class UserData(BaseModel):
     id: str
     email: str
 
-
-class AuthTokenData(BaseModel):
+class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user: UserData
+    user_id: str
+    email: str
 
 
 class ProfileData(BaseModel):
