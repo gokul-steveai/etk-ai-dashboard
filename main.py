@@ -75,14 +75,21 @@ async def get_current_user(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            raise HTTPException(status_code=401, detail="Invalid session token.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid session token.",
+            )
     except JWTError:
-        raise HTTPException(status_code=401, detail="Session expired or invalid token.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or invalid token.",
+        )
 
-    result = await db.execute(select(User).filter(User.email == email))
-    user = result.scalars().first()
+    user = await find_user_by_email(db, email)
     if user is None:
-        raise HTTPException(status_code=401, detail="User profile not found.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User profile not found."
+        )
 
     return user
 
@@ -93,7 +100,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     field = error["loc"][-1]
     msg = error["msg"]
     return JSONResponse(
-        status_code=422,
+        status_code=status.HTTP_400_BAD_REQUEST,
         content={"success": False, "message": f"{field}: {msg}"},
     )
 
@@ -106,7 +113,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     existing_user = await find_user_by_email(db, user.email)
     if existing_user:
-        raise HTTPException(status_code=400, detail="Email already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists"
+        )
 
     new_user = User(email=user.email, password=hash_password(user.password))
     db.add(new_user)
@@ -131,7 +140,9 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
 async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
     db_user = await find_user_by_email(db, user.email)
     if not db_user or not verify_password(user.password, db_user.password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
+        )
 
     token = create_access_token({"sub": db_user.email})
     return BaseResponse(
