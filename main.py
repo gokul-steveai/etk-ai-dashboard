@@ -1,81 +1,90 @@
+from contextlib import asynccontextmanager
 from typing import Optional
-
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
-from auth import generate_otp, send_email
-from database import engine, SessionLocal
-from auth import hash_password, verify_password, create_access_token
+from auth import (
+    generate_otp,
+    hash_password,
+    send_email,
+    verify_password,
+    create_access_token,
+)
+from database import engine, get_db
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import HTTPException
+from fastapi.exceptions import HTTPException, RequestValidationError
 from uuid import UUID, uuid4
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt, JWTError
 from auth import SECRET_KEY, ALGORITHM, GOOGLE_CLIENT_ID
-from fastapi.exceptions import RequestValidationError
 from schemas import (
-    AuthTokenData,
-    LinkedInAuthRequest,
-    ProfileData,
-    UserLogin,
     BaseResponse,
-    TokenData,
-    UserCreate,
-    CompanyProfileCreate,
-    GoogleAuthRequest,
-    ResetPassword,
+    AuthTokenData,
     ForgotPassword,
+    GoogleAuthRequest,
+    LinkedInAuthRequest,
+    ResetPassword,
+    UserCreate,
+    UserLogin,
+    TokenData,
+    ProfileData,
+    CompanyProfileCreate,
     UserData,
 )
-from models import User, Base, CompanyProfile
+from models import User, CompanyProfile, Base
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import requests
 
-Base.metadata.create_all(bind=engine)
 
-app = FastAPI(root_path="/api")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+    yield
 
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    await engine.dispose()
 
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+app = FastAPI(root_path="/api", lifespan=lifespan)
+
+security_scheme = HTTPBearer()
+
+
+async def find_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+    """Fetches a user by email using Asynchronous SQLAlchemy 2.0 select execution."""
+    result = await db.execute(select(User).filter(User.email == email))
+    return result.scalars().first()
+
+
+async def find_user_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
+    """Fetches a user by string UUID asynchronously."""
+    result = await db.execute(select(User).filter(User.id == user_id))
+    return result.scalars().first()
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
+    db: AsyncSession = Depends(get_db),
 ):
+    token = credentials.credentials
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(status_code=401, detail="Invalid session token.")
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Session expired or invalid token.")
 
-    user = db.query(User).filter(User.email == email).first()
+    result = await db.execute(select(User).filter(User.email == email))
+    user = result.scalars().first()
     if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="User profile not found.")
+
     return user
-
-
-def find_user_by_email(db: Session, email: str) -> Optional[User]:
-    """fetches a user by email using SQLAlchemy 2.0 select statements."""
-    result = db.execute(select(User).filter(User.email == email))
-    return result.scalars().first()
-
-
-def find_user_by_id(db: Session, user_id: str) -> Optional[User]:
-    """fetches a user by string UUID."""
-    result = db.execute(select(User).filter(User.id == user_id))
-    return result.scalars().first()
 
 
 @app.exception_handler(RequestValidationError)
@@ -83,7 +92,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     error = exc.errors()[0]
     field = error["loc"][-1]
     msg = error["msg"]
-
     return JSONResponse(
         status_code=422,
         content={"success": False, "message": f"{field}: {msg}"},
@@ -91,63 +99,55 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 @app.post(
-    "/signup", response_model=BaseResponse[TokenData], status_code=status.HTTP_200_OK
+    "/signup",
+    response_model=BaseResponse[TokenData],
+    status_code=status.HTTP_200_OK,
 )
-def signup(user: UserCreate, db: Session = Depends(get_db)):
-    existing_user = find_user_by_email(db, user.email)
-
+async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    existing_user = await find_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already exists")
 
     new_user = User(email=user.email, password=hash_password(user.password))
-
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    await db.commit()
+    await db.refresh(new_user)
 
     token = create_access_token({"sub": new_user.email})
-
-    return {
-        "success": True,
-        "message": "User created successfully",
-        "data": {
-            "user_id": str(new_user.id),
-            "access_token": token,
-            "token_type": "bearer",
-        },
-    }
+    return BaseResponse(
+        success=True,
+        message="User created successfully",
+        data=TokenData(
+            user_id=str(new_user.id), access_token=token, token_type="bearer"
+        ),
+    )
 
 
 @app.post(
-    "/login", response_model=BaseResponse[TokenData], status_code=status.HTTP_200_OK
+    "/login",
+    response_model=BaseResponse[TokenData],
+    status_code=status.HTTP_200_OK,
 )
-def login(user: UserLogin, db: Session = Depends(get_db)):
-    db_user = find_user_by_email(db, user.email)
-
-    if not db_user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    if not verify_password(user.password, db_user.password):
-        raise HTTPException(status_code=401, detail="Wrong password")
+async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
+    db_user = await find_user_by_email(db, user.email)
+    if not db_user or not verify_password(user.password, db_user.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_access_token({"sub": db_user.email})
-
     return BaseResponse(
         success=True,
         message="Login successful",
-        data={
-            "user_id": str(db_user.id),
-            "access_token": token,
-            "token_type": "bearer",
-        },
+        data=TokenData(
+            user_id=str(db_user.id), access_token=token, token_type="bearer"
+        ),
     )
 
 
 @app.post(
     "/forgot-password", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
 )
-def forgot_password(data: ForgotPassword, db: Session = Depends(get_db)):
-    user = find_user_by_email(db, data.email)
+async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_db)):
+    user = await find_user_by_email(db, data.email)
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -156,7 +156,7 @@ def forgot_password(data: ForgotPassword, db: Session = Depends(get_db)):
     user.otp = otp
     user.otp_expiry = datetime.utcnow() + timedelta(minutes=5)
 
-    db.commit()
+    await db.commit()
     send_email(user.email, otp)
 
     return {"message": "OTP sent to your email"}
@@ -165,8 +165,8 @@ def forgot_password(data: ForgotPassword, db: Session = Depends(get_db)):
 @app.post(
     "/reset-password", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
 )
-def reset_password(data: ResetPassword, db: Session = Depends(get_db)):
-    user = find_user_by_email(db, data.email)
+async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)):
+    user = await find_user_by_email(db, data.email)
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -186,7 +186,7 @@ def reset_password(data: ResetPassword, db: Session = Depends(get_db)):
     user.otp = None
     user.otp_expiry = None
 
-    db.commit()
+    await db.commit()
 
     return {"message": "Password reset successful"}
 
@@ -196,15 +196,10 @@ def reset_password(data: ResetPassword, db: Session = Depends(get_db)):
     response_model=BaseResponse[ProfileData],
     status_code=status.HTTP_201_CREATED,
 )
-def create_company_profile(data: CompanyProfileCreate, db: Session = Depends(get_db)):
-    """
-    Create or update user company profile (FULL PAYLOAD SUPPORT)
-    """
-
+async def create_company_profile(
+    data: CompanyProfileCreate, db: AsyncSession = Depends(get_db)
+):
     try:
-        print("data --->>", data)
-
-        # ✅ Store FULL payload dynamically
         profile_data = {
             "company_profile": data.company_profile,
             "countries": data.countries,
@@ -228,81 +223,66 @@ def create_company_profile(data: CompanyProfileCreate, db: Session = Depends(get
             "business_type_of_support": data.business_type_of_support,
         }
 
-        # ✅ Check existing profile
-        existing_entry = (
-            db.query(CompanyProfile)
-            .filter(CompanyProfile.user_id == str(data.user_id))
-            .first()
+        result = await db.execute(
+            select(CompanyProfile).filter(CompanyProfile.user_id == str(data.user_id))
         )
+        existing_entry = result.scalars().first()
 
         if existing_entry:
-            # 🔄 UPDATE
-            print(f"Updating profile for user {data.user_id}")
             existing_entry.data = profile_data
-            db.commit()
-            db.refresh(existing_entry)
-
-            return {
-                "success": True,
-                "message": "Data updated successfully",
-                "data": {
-                    "id": str(existing_entry.id),
-                    "user_id": str(existing_entry.user_id),
-                    "data": existing_entry,
-                },
-            }
-
+            await db.commit()
+            await db.refresh(existing_entry)
+            return BaseResponse(
+                success=True,
+                message="Data updated successfully",
+                data=ProfileData(
+                    id=str(existing_entry.id),
+                    user_id=str(existing_entry.user_id),
+                    data=existing_entry.data,
+                ),
+            )
         else:
-            # 🆕 CREATE
-            print(f"Creating new profile for user {data.user_id}")
             new_entry = CompanyProfile(
-                id=uuid4(), user_id=data.user_id, data=profile_data
+                id=str(uuid4()), user_id=str(data.user_id), data=profile_data
             )
             db.add(new_entry)
-            db.commit()
-            db.refresh(new_entry)
-
-            return {
-                "success": True,
-                "message": "Data saved successfully",
-                "data": {
-                    "id": str(new_entry.id),
-                    "user_id": str(new_entry.user_id),
-                    "data": new_entry,
-                },
-            }
-
+            await db.commit()
+            await db.refresh(new_entry)
+            return BaseResponse(
+                success=True,
+                message="Data saved successfully",
+                data=ProfileData(
+                    id=str(new_entry.id),
+                    user_id=str(new_entry.user_id),
+                    data=new_entry.data,
+                ),
+            )
     except Exception as e:
-        db.rollback()
-        print("ERROR:", str(e))
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def handle_oauth_user_provisioning(
-    db: Session, email: str
+async def handle_oauth_user_provisioning(
+    db: AsyncSession, email: str
 ) -> BaseResponse[AuthTokenData]:
     """
     Resolves an OAuth user by email, registers them if missing,
     generates a system JWT access token.
     """
-    user = find_user_by_email(db, email)
+    user = await find_user_by_email(db, email)
 
     if not user:
         user = User(
-            id=str(uuid4()),
-            email=email,
-            password=None,  # Explicitly NULL for passwordless OAuth accounts
-            otp=None,
-            otp_expiry=None,
+            id=str(uuid4()), email=email, password=None, otp=None, otp_expiry=None
         )
+
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        await db.commit()
+        await db.refresh(user)
 
     backend_access_token = create_access_token(
         data={"sub": user.email, "user_id": user.id}
     )
-
     return BaseResponse(
         success=True,
         message="Authentication successful",
@@ -319,45 +299,40 @@ def handle_oauth_user_provisioning(
     response_model=BaseResponse[AuthTokenData],
     status_code=status.HTTP_200_OK,
 )
-def google_authentication(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
-    """
-    Receives the Google id_token from the frontend, validates it against Google,
-    and delegates user provisioning and token generation to the shared authentication layer.
-    """
+async def google_authentication(
+    payload: GoogleAuthRequest, db: AsyncSession = Depends(get_db)
+):
     if not payload.id_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing Google ID token in request payload.",
         )
-
     try:
         id_info = id_token.verify_oauth2_token(
             payload.id_token, google_requests.Request(), GOOGLE_CLIENT_ID
         )
-
         email = id_info.get("email")
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Google token did not provide a valid email address.",
+                detail="Google token payload invalid.",
             )
-
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid Google credentials: {str(e)}",
         )
 
-    return handle_oauth_user_provisioning(db, email)
+    return await handle_oauth_user_provisioning(db, email)
 
 
 @app.post(
-    "/linkedin",
+    "/auth/linkedin",
     response_model=BaseResponse[AuthTokenData],
     status_code=status.HTTP_200_OK,
 )
-def linkedin_authentication(
-    payload: LinkedInAuthRequest, db: Session = Depends(get_db)
+async def linkedin_authentication(
+    payload: LinkedInAuthRequest, db: AsyncSession = Depends(get_db)
 ):
     """
     Receives the LinkedIn access_token from the frontend, validates it against
@@ -366,28 +341,23 @@ def linkedin_authentication(
     if not payload.access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing LinkedIn access token in request payload.",
+            detail="Missing LinkedIn access token.",
         )
-
     try:
         headers = {"Authorization": f"Bearer {payload.access_token}"}
         response = requests.get("https://api.linkedin.com/v2/userinfo", headers=headers)
-
         if response.status_code != 200:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Failed to verify token with LinkedIn or token has expired.",
             )
-
         user_info = response.json()
         email = user_info.get("email")
-
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="LinkedIn profile does not contain a verified email address.",
+                detail="LinkedIn profile missing verified email address.",
             )
-
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
@@ -396,7 +366,7 @@ def linkedin_authentication(
             detail=f"LinkedIn authentication failed: {str(e)}",
         )
 
-    return handle_oauth_user_provisioning(db, email)
+    return await handle_oauth_user_provisioning(db, email)
 
 
 @app.get(
@@ -404,14 +374,15 @@ def linkedin_authentication(
     response_model=BaseResponse[dict],
     status_code=status.HTTP_200_OK,
 )
-def get_user_interests(user_id: str, db: Session = Depends(get_db)):
+async def get_user_interests(user_id: str, db: AsyncSession = Depends(get_db)):
     try:
         try:
-            user_uuid = str(
-                UUID(user_id)
-            )  # ✅ validate AND convert to string immediately
+            user_uuid = str(UUID(user_id))
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid user_id format.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user_id format.",
+            )
 
         default_profile = {
             "company_profile": "",
@@ -436,36 +407,33 @@ def get_user_interests(user_id: str, db: Session = Depends(get_db)):
             "business_type_of_support": [],
         }
 
-        # ✅ user_uuid is already a str now
-        user = db.query(User).filter(User.id == user_uuid).first()
+        user = await find_user_by_id(db, user_uuid)
 
         if not user:
-            return {
-                "success": True,
-                "message": "User not found",
-                "data": {"user_id": user_id, "email": None, "profile": default_profile},
-            }
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
 
-        profile = (
-            db.query(CompanyProfile)
-            .filter(CompanyProfile.user_id == user_uuid)  # ✅ also a str
-            .first()
+        prof_res = await db.execute(
+            select(CompanyProfile).filter(CompanyProfile.user_id == user_uuid)
         )
+        profile = prof_res.scalars().first()
 
-        return {
-            "success": True,
-            "message": "Data not found" if not profile else "Data fetched successfully",
-            "data": {
+        return BaseResponse(
+            success=True,
+            message="Data fetched successfully",
+            data={
                 "user_id": str(user.id),
                 "email": user.email,
                 "profile": profile.data if profile else default_profile,
             },
-        }
-
-    except HTTPException:
-        raise
+        )
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.get(
@@ -473,9 +441,9 @@ def get_user_interests(user_id: str, db: Session = Depends(get_db)):
     response_model=BaseResponse[UserData],
     status_code=status.HTTP_200_OK,
 )
-def get_current_user_info(current_user: User = Depends(get_current_user)):
-    return {
-        "success": True,
-        "message": "User information retrieved successfully",
-        "data": {"user_id": str(current_user.id), "email": current_user.email},
-    }
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    return BaseResponse(
+        success=True,
+        message="User information retrieved successfully",
+        data=UserData(id=str(current_user.id), email=current_user.email),
+    )
