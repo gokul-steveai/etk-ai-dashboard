@@ -215,8 +215,14 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
 async def create_company_profile(
     data: CompanyProfileCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
+        if not current_user or current_user.id != data.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not authenticated.",
+            )
         profile_data = {
             "company_profile": data.company_profile,
             "countries": data.countries,
@@ -387,9 +393,19 @@ async def linkedin_authentication(
     response_model=BaseResponse[dict],
     status_code=status.HTTP_200_OK,
 )
-async def get_user_interests(user_id: str, db: AsyncSession = Depends(get_db)):
+async def get_user_interests(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         try:
+            if not user_id or current_user.id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Missing or invalid user_id parameter.",
+                )
+
             user_uuid = str(UUID(user_id))
         except ValueError:
             raise HTTPException(
