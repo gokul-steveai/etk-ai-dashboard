@@ -282,14 +282,13 @@ def handle_oauth_user_provisioning(
     db: Session, email: str
 ) -> BaseResponse[AuthTokenData]:
     """
-    DRY Helper: Resolves an OAuth user by email, registers them if missing,
-    generates a system JWT access token, and returns a unified response envelope.
+    Resolves an OAuth user by email, registers them if missing,
+    generates a system JWT access token.
     """
-    # 1. Fetch or provision the user on-the-fly
     user = find_user_by_email(db, email)
 
     if not user:
-        user = models.User(
+        user = User(
             id=str(uuid4()),
             email=email,
             password=None,  # Explicitly NULL for passwordless OAuth accounts
@@ -300,12 +299,10 @@ def handle_oauth_user_provisioning(
         db.commit()
         db.refresh(user)
 
-    # 2. Issue our standard system-wide access token
     backend_access_token = create_access_token(
         data={"sub": user.email, "user_id": user.id}
     )
 
-    # 3. Return the fully typed, unified response envelope
     return BaseResponse(
         success=True,
         message="Authentication successful",
@@ -318,7 +315,7 @@ def handle_oauth_user_provisioning(
 
 
 @app.post(
-    "/google",
+    "/auth/google",
     response_model=BaseResponse[AuthTokenData],
     status_code=status.HTTP_200_OK,
 )
@@ -347,7 +344,7 @@ def google_authentication(payload: GoogleAuthRequest, db: Session = Depends(get_
 
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_41_UNAUTHORIZED,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid Google credentials: {str(e)}",
         )
 
@@ -378,7 +375,7 @@ def linkedin_authentication(
 
         if response.status_code != 200:
             raise HTTPException(
-                status_code=status.HTTP_41_UNAUTHORIZED,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Failed to verify token with LinkedIn or token has expired.",
             )
 
@@ -395,7 +392,7 @@ def linkedin_authentication(
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(
-            status_code=status.HTTP_41_UNAUTHORIZED,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"LinkedIn authentication failed: {str(e)}",
         )
 
