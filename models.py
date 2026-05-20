@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, Enum, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.mysql import CHAR, JSON
 from database import Base
+from schemas import PlanName, SubscriptionStatus
 
 
 class User(Base):
@@ -16,6 +18,14 @@ class User(Base):
     otp = Column(String(10), nullable=True)
     otp_expiry = Column(DateTime, nullable=True)
 
+    # Relationships
+    subscription = relationship(
+        "UserSubscription",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
 
 class CompanyProfile(Base):
     __tablename__ = "company_profiles"
@@ -27,3 +37,53 @@ class CompanyProfile(Base):
     data = Column(JSON, nullable=False)
 
     user = relationship("User")
+
+
+class SubscriptionPlan(Base):
+    __tablename__ = "subscription_plans"
+
+    id = Column(
+        CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True
+    )
+    name = Column(Enum(PlanName), unique=True, nullable=False, index=True)
+    description = Column(String(255), nullable=True)
+
+    max_saved_queries = Column(Integer, default=0, nullable=False)
+    max_compare_countries = Column(Integer, default=2, nullable=False)
+
+    # Subscription plan features JSON
+    features = Column(JSON, nullable=False, default=dict)
+
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+
+class UserSubscription(Base):
+    __tablename__ = "user_subscriptions"
+
+    id = Column(
+        CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True
+    )
+    user_id = Column(CHAR(36), ForeignKey("users2.id"), unique=True, nullable=False)
+    plan_id = Column(CHAR(36), ForeignKey("subscription_plans.id"), nullable=False)
+
+    status = Column(
+        Enum(SubscriptionStatus), default=SubscriptionStatus.ACTIVE, nullable=False
+    )
+
+    current_period_start = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+    current_period_end = Column(DateTime, nullable=True)
+
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+    user = relationship("User", back_populates="subscription")
+    plan = relationship("SubscriptionPlan")

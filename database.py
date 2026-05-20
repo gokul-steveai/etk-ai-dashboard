@@ -1,21 +1,20 @@
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-
-DATABASE_URL = "mysql+aiomysql://root:root123@127.0.0.1:3306/etk"
+from config import settings
 
 engine = create_async_engine(
-    DATABASE_URL,
+    url=settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,  # Automatically detects disconnected DB connections
-    pool_recycle=3600,   # Prevents MySQL "server has gone away" errors
+    pool_recycle=3600,  # Prevents MySQL "server has gone away" errors
 )
 
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False  # Crucial for async so attributes don't lazy-load error out
+    expire_on_commit=False,  # Crucial for async so attributes don't lazy-load error out
 )
 
 Base = declarative_base()
@@ -29,6 +28,7 @@ async def get_db():
         finally:
             await db.close()
 
+
 # Async connection test verification block
 async def test_connection():
     try:
@@ -36,6 +36,7 @@ async def test_connection():
             print("✅ Async Database connected successfully!")
     except Exception as e:
         print("❌ Async Connection Error:", e)
+
 
 if __name__ == "__main__":
     asyncio.run(test_connection())

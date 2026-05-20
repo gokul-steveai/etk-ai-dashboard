@@ -1,22 +1,11 @@
-from datetime import datetime, timedelta
-from jose import jwt
+from datetime import datetime, timedelta, timezone
+from jose import jwt, JWTError
 from passlib.context import CryptContext
-import os
-from dotenv import load_dotenv
+from config import settings
 import hashlib
 import smtplib
 import random
 from email.mime.text import MIMEText
-
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRET_KEY")
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -24,9 +13,25 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT token creation
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+# JWT token verification
+def verify_token(token: str) -> dict | None:
+    """
+    Verifies a JWT token and returns the payload if valid, otherwise returns None.
+    """
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
+        return payload
+    except JWTError:
+        return None
 
 
 def preprocess_password(password: str):
@@ -55,14 +60,14 @@ def send_email(to_email, otp):
 
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
+    msg["From"] = settings.EMAIL_USER
     msg["To"] = to_email
 
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, to_email, msg.as_string())
+        server.login(settings.EMAIL_USER, settings.EMAIL_PASS)
+        server.sendmail(settings.EMAIL_USER, to_email, msg.as_string())
         server.quit()
     except Exception as e:
         print("Email error:", e)

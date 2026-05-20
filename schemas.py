@@ -1,6 +1,8 @@
+from enum import StrEnum
+
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
-from typing import Generic, Optional, TypeVar
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
@@ -64,15 +66,41 @@ class BaseResponse(BaseModel, Generic[T]):
     data: Optional[T] = None
 
 
+class PlanName(StrEnum):
+    FREE = "FREE"
+    BASIC = "BASIC"
+    INDIVIDUAL = "INDIVIDUAL"
+    RESEARCHER = "RESEARCHER"
+    ENTERPRISE = "ENTERPRISE"
+
+
+class SubscriptionStatus(StrEnum):
+    ACTIVE = "active"
+    TRIALING = "trialing"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+
+
+class UserPlanData(BaseModel):
+    plan_name: PlanName
+    status: SubscriptionStatus
+    max_saved_queries: int
+    max_compare_countries: int
+    features: Dict[str, Any]
+
+
 class UserData(BaseModel):
     id: str
     email: str
+    subscription: UserPlanData
+
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user_id: str
     email: str
+    subscription: UserPlanData
 
 
 class ProfileData(BaseModel):
@@ -88,7 +116,7 @@ class UserInfoData(BaseModel):
 
 
 class CompanyProfileCreate(BaseModel):
-    user_id: UUID
+    user_id: str
     company_profile: str
 
     countries: list

@@ -3,21 +3,23 @@ from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
 from auth import (
     generate_otp,
     hash_password,
     send_email,
     verify_password,
-    create_access_token,
+    verify_token,
 )
+from auth_utils import generate_auth_response, get_user_active_plan
 from database import engine, get_db
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException, RequestValidationError
 from uuid import UUID, uuid4
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import jwt, JWTError
-from auth import SECRET_KEY, ALGORITHM, GOOGLE_CLIENT_ID
+from jose import JWTError
+from config import settings
 from schemas import (
     BaseResponse,
     ForgotPassword,
@@ -32,7 +34,7 @@ from schemas import (
     UserData,
 )
 from models import User, CompanyProfile, Base
-from google.oauth2 import id_token
+from google.oauth2.id_token import verify_oauth2_token
 from google.auth.transport import requests as google_requests
 import requests
 
@@ -71,13 +73,15 @@ async def get_current_user(
     token = credentials.credentials
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
+        payload = verify_token(token)
+
+        if payload is None or payload.get("sub") is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid session token.",
             )
+
+        email: str = payload.get("sub")
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -121,17 +125,7 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_user)
 
-    token = create_access_token({"sub": new_user.email})
-    return BaseResponse(
-        success=True,
-        message="User created successfully",
-        data=TokenResponse(
-            user_id=str(new_user.id),
-            access_token=token,
-            token_type="bearer",
-            email=user.email,
-        ),
-    )
+    return await generate_auth_response(db, new_user, "Signup successful.")
 
 
 @app.post(
@@ -146,17 +140,7 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
 
-    token = create_access_token({"sub": db_user.email})
-    return BaseResponse(
-        success=True,
-        message="Login successful",
-        data=TokenResponse(
-            user_id=str(db_user.id),
-            access_token=token,
-            token_type="bearer",
-            email=user.email,
-        ),
-    )
+    return await generate_auth_response(db, db_user, "Login successful.")
 
 
 @app.post(
@@ -166,11 +150,15 @@ async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_d
     user = await find_user_by_email(db, data.email)
 
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     otp = generate_otp()
     user.otp = otp
-    user.otp_expiry = datetime.utcnow() + timedelta(minutes=5)
+    user.otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+        minutes=5
+    )
 
     await db.commit()
     send_email(user.email, otp)
@@ -185,15 +173,21 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
     user = await find_user_by_email(db, data.email)
 
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     # Check OTP
     if user.otp != data.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP"
+        )
 
     # Check expiry
-    if not user.otp_expiry or datetime.utcnow() > user.otp_expiry:
-        raise HTTPException(status_code=400, detail="OTP expired")
+    if not user.otp_expiry or datetime.now(timezone.utc) > user.otp_expiry:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="OTP expired"
+        )
 
     # Update password
     user.password = hash_password(data.new_password)
@@ -303,14 +297,7 @@ async def handle_oauth_user_provisioning(
         await db.commit()
         await db.refresh(user)
 
-    token = create_access_token(data={"sub": user.email, "user_id": user.id})
-    return BaseResponse(
-        success=True,
-        message="Authentication successful",
-        data=TokenResponse(
-            user_id=str(user.id), access_token=token, token_type="bearer", email=email
-        ),
-    )
+    return await generate_auth_response(db, user, "Login successful.")
 
 
 @app.post(
@@ -327,8 +314,8 @@ async def google_authentication(
             detail="Missing Google ID token in request payload.",
         )
     try:
-        id_info = id_token.verify_oauth2_token(
-            payload.id_token, google_requests.Request(), GOOGLE_CLIENT_ID
+        id_info = verify_oauth2_token(
+            payload.id_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
         )
         email = id_info.get("email")
         if not email:
@@ -470,9 +457,15 @@ async def get_user_interests(
     response_model=BaseResponse[UserData],
     status_code=status.HTTP_200_OK,
 )
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Returns the user's details for the authenticated user."""
+    plan = await get_user_active_plan(db, str(current_user.id))
     return BaseResponse(
         success=True,
         message="User information retrieved successfully",
-        data=UserData(id=str(current_user.id), email=current_user.email),
+        data=UserData(
+            id=str(current_user.id), email=current_user.email, subscription=plan
+        ),
     )
