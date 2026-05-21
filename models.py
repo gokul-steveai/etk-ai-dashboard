@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, Enum, Integer, String, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.dialects.mysql import CHAR, JSON
+from sqlalchemy.orm import relationship
+
 from database import Base
 from schemas import PlanName, SubscriptionStatus
 
@@ -15,8 +17,21 @@ class User(Base):
     )
     email = Column(String(255), unique=True, index=True)
     password = Column(String(255))
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
+    profile_image = Column(String(255), nullable=True)
     otp = Column(String(10), nullable=True)
     otp_expiry = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime, nullable=True, default=None)
+
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
 
     # Relationships
     subscription = relationship(
@@ -54,6 +69,8 @@ class SubscriptionPlan(Base):
     # Subscription plan features JSON
     features = Column(JSON, nullable=False, default=dict)
 
+    stripe_price_id = Column(String(255), unique=True, nullable=True)
+
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
@@ -78,6 +95,9 @@ class UserSubscription(Base):
         nullable=False,
     )
     current_period_end = Column(DateTime, nullable=True)
+
+    stripe_subscription_id = Column(String(255), unique=True, nullable=True)
+    stripe_customer_id = Column(String(255), unique=True, nullable=True)
 
     updated_at = Column(
         DateTime,

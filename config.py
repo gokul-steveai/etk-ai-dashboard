@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "TheSecretKey"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    STRIPE_SECRET_KEY: str
+    STRIPE_PUBLISHABLE_KEY: str
+    STRIPE_SUCCESS_URL: str = "http://localhost:3000/success"
+    STRIPE_CANCEL_URL: str = "http://localhost:3000/cancel"
+    STRIPE_WEBHOOK_SECRET: str | None
 
     model_config = SettingsConfigDict(
         env_file=".env",

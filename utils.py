@@ -1,8 +1,16 @@
 from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import HTTPException, status
+from fastapi.params import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-from auth import create_access_token
+
+from auth import create_access_token, verify_token
+from database import get_db
 from models import SubscriptionPlan, User, UserSubscription
 from schemas import (
     BaseResponse,
@@ -10,7 +18,44 @@ from schemas import (
     SubscriptionStatus,
     TokenResponse,
     UserPlanData,
+    UserProfile,
 )
+
+security_scheme = HTTPBearer()
+
+
+async def find_user_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
+    """Fetches a user by string UUID asynchronously."""
+    result = await db.execute(
+        select(User).filter(User.id == user_id, User.deleted_at == None)
+    )
+    return result.scalars().first()
+
+
+async def find_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+    """Fetches a user by email using Asynchronous SQLAlchemy 2.0 select execution."""
+    result = await db.execute(
+        select(User).filter(User.email == email, User.deleted_at == None)
+    )
+    return result.scalars().first()
+
+
+async def fetch_user_subscription(
+    db: AsyncSession, user_id: str
+) -> UserSubscription | None:
+    sub_res = await db.execute(
+        select(UserSubscription).filter(UserSubscription.user_id == user_id)
+    )
+    return sub_res.scalars().first()
+
+
+async def fetch_subscription_plan_by_name(
+    db: AsyncSession, plan_name: PlanName
+) -> SubscriptionPlan | None:
+    plan_res = await db.execute(
+        select(SubscriptionPlan).filter(SubscriptionPlan.name == plan_name)
+    )
+    return plan_res.scalars().first()
 
 
 async def ensure_user_has_free_plan(db: AsyncSession, user_id: str) -> None:
@@ -18,11 +63,8 @@ async def ensure_user_has_free_plan(db: AsyncSession, user_id: str) -> None:
     Defensively updates or assigns the default FREE plan mapping
     to any new account or unassigned legacy database user.
     """
-    # 1. Look for an existing mapping record row
-    sub_res = await db.execute(
-        select(UserSubscription).filter(UserSubscription.user_id == user_id)
-    )
-    existing_subscription = sub_res.scalars().first()
+    # Look for an existing mapping record row
+    existing_subscription = await fetch_user_subscription(db, user_id)
 
     if existing_subscription:
         return
@@ -67,9 +109,18 @@ async def generate_auth_response(
         message=message,
         data=TokenResponse(
             user_id=str(user.id),
+            email=user.email,
             access_token=access_token,
             token_type="bearer",
             subscription=subscription_data,
+            user=UserProfile(
+                first_name=user.first_name or "",
+                last_name=user.last_name or "",
+                profile_image=user.profile_image or "",
+                created_at=user.created_at,
+                id=str(user.id),
+                email=user.email,
+            ),
         ),
     )
 
@@ -105,3 +156,35 @@ async def get_user_active_plan(db: AsyncSession, user_id: str) -> UserPlanData:
         max_compare_countries=sub.plan.max_compare_countries,
         features=sub.plan.features,
     )
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the current authenticated user."""
+    token = credentials.credentials
+
+    try:
+        payload = verify_token(token)
+
+        if payload is None or payload.get("sub") is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid session token.",
+            )
+
+        email: str = payload.get("sub")
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or invalid token.",
+        )
+
+    user = await find_user_by_email(db, email)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User profile not found."
+        )
+
+    return user

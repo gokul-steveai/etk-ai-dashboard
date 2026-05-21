@@ -1,42 +1,54 @@
+import base64
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from uuid import UUID, uuid4
+
+import requests
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.exceptions import HTTPException, RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from google.auth.transport import requests as google_requests
+from google.oauth2.id_token import verify_oauth2_token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta, timezone
+from stripe import SignatureVerificationError, Subscription, Webhook
 
-from auth import (
-    generate_otp,
-    hash_password,
-    send_email,
-    verify_password,
-    verify_token,
-)
-from auth_utils import generate_auth_response, get_user_active_plan
-from database import engine, get_db
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import HTTPException, RequestValidationError
-from uuid import UUID, uuid4
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+from auth import generate_otp, hash_password, send_email, verify_password
+from billing import router as billing_router
 from config import settings
+from database import engine, get_db
+from models import Base, CompanyProfile, User, UserSubscription
 from schemas import (
     BaseResponse,
+    CompanyProfileCreate,
     ForgotPassword,
     GoogleAuthRequest,
     LinkedInAuthRequest,
-    ResetPassword,
-    UserCreate,
-    UserLogin,
-    TokenResponse,
+    PlanName,
     ProfileData,
-    CompanyProfileCreate,
+    ResetPassword,
+    SubscriptionStatus,
+    TokenResponse,
+    UserCreate,
     UserData,
+    UserLogin,
+    UserProfilePatchRequest,
 )
-from models import User, CompanyProfile, Base
-from google.oauth2.id_token import verify_oauth2_token
-from google.auth.transport import requests as google_requests
-import requests
+from utils import (
+    fetch_subscription_plan_by_name,
+    fetch_user_subscription,
+    find_user_by_email,
+    find_user_by_id,
+    generate_auth_response,
+    get_current_user,
+    get_user_active_plan,
+)
+
+UPLOAD_DIR = "static/profile_images"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 @asynccontextmanager
@@ -51,50 +63,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(root_path="/api", lifespan=lifespan)
 
-security_scheme = HTTPBearer()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
-async def find_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    """Fetches a user by email using Asynchronous SQLAlchemy 2.0 select execution."""
-    result = await db.execute(select(User).filter(User.email == email))
-    return result.scalars().first()
-
-
-async def find_user_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
-    """Fetches a user by string UUID asynchronously."""
-    result = await db.execute(select(User).filter(User.id == user_id))
-    return result.scalars().first()
-
-
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
-    db: AsyncSession = Depends(get_db),
-):
-    token = credentials.credentials
-
-    try:
-        payload = verify_token(token)
-
-        if payload is None or payload.get("sub") is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid session token.",
-            )
-
-        email: str = payload.get("sub")
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired or invalid token.",
-        )
-
-    user = await find_user_by_email(db, email)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="User profile not found."
-        )
-
-    return user
+app.include_router(billing_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -280,22 +251,40 @@ async def create_company_profile(
 
 
 async def handle_oauth_user_provisioning(
-    db: AsyncSession, email: str
+    db: AsyncSession,
+    email: str,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    social_avatar_url: Optional[str] = None,
 ) -> BaseResponse[TokenResponse]:
     """
-    Resolves an OAuth user by email, registers them if missing,
-    generates a system JWT access token.
+    Resolves an OAuth user by email, handles fallback delta properties,
+    and provisions profiles with unified social media image URLs.
     """
     user = await find_user_by_email(db, email)
 
     if not user:
         user = User(
-            id=str(uuid4()), email=email, password=None, otp=None, otp_expiry=None
+            id=str(uuid4()),
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            profile_image=social_avatar_url,
+            password=None,
+            otp=None,
+            otp_expiry=None,
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         db.add(user)
         await db.commit()
         await db.refresh(user)
+    else:
+        if not user.profile_image and social_avatar_url:
+            user.profile_image = social_avatar_url
+            user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
 
     return await generate_auth_response(db, user, "Login successful.")
 
@@ -318,6 +307,9 @@ async def google_authentication(
             payload.id_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
         )
         email = id_info.get("email")
+        f_name = id_info.get("given_name")
+        l_name = id_info.get("family_name")
+        avatar = id_info.get("picture")
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -329,7 +321,9 @@ async def google_authentication(
             detail=f"Invalid Google credentials: {str(e)}",
         )
 
-    return await handle_oauth_user_provisioning(db, email)
+    return await handle_oauth_user_provisioning(
+        db, email, first_name=f_name, last_name=l_name, social_avatar_url=avatar
+    )
 
 
 @app.post(
@@ -352,13 +346,19 @@ async def linkedin_authentication(
     try:
         headers = {"Authorization": f"Bearer {payload.access_token}"}
         response = requests.get("https://api.linkedin.com/v2/userinfo", headers=headers)
-        if response.status_code != 200:
+
+        if response.status_code != status.HTTP_200_OK:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Failed to verify token with LinkedIn or token has expired.",
             )
+
         user_info = response.json()
         email = user_info.get("email")
+        f_name = user_info.get("given_name")
+        l_name = user_info.get("family_name")
+        avatar = user_info.get("picture")
+
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -372,7 +372,9 @@ async def linkedin_authentication(
             detail=f"LinkedIn authentication failed: {str(e)}",
         )
 
-    return await handle_oauth_user_provisioning(db, email)
+    return await handle_oauth_user_provisioning(
+        db, email, first_name=f_name, last_name=l_name, social_avatar_url=avatar
+    )
 
 
 @app.get(
@@ -466,6 +468,232 @@ async def get_current_user_info(
         success=True,
         message="User information retrieved successfully",
         data=UserData(
-            id=str(current_user.id), email=current_user.email, subscription=plan
+            id=str(current_user.id),
+            email=current_user.email,
+            subscription=plan,
+            created_at=current_user.created_at,
+            first_name=current_user.first_name or "",
+            last_name=current_user.last_name or "",
+            profile_image=current_user.profile_image or "",
         ),
+    )
+
+
+@app.post("/webhook")
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> BaseResponse[str]:
+    payload = await request.body()
+
+    try:
+        event = Webhook.construct_event(
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=settings.STRIPE_WEBHOOK_SECRET,
+            api_key=settings.STRIPE_SECRET_KEY,
+        )
+    except (ValueError, SignatureVerificationError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid signature verification.",
+        )
+
+    event_type = event["type"]
+    session_data = event["data"]["object"]
+
+    # Process successful checkout activations and updates
+    if event_type in ["checkout.session.completed", "invoice.payment_succeeded"]:
+        metadata = session_data.get("metadata", {})
+        user_id = metadata.get("user_id")
+        plan_name = metadata.get("plan_name", PlanName.BASIC)
+
+        # Pull core structural transaction tracking hashes directly from Stripe's payload object
+        stripe_customer = session_data.get("customer")
+        stripe_sub = session_data.get("subscription")
+
+        if user_id:
+            plan_obj = await fetch_subscription_plan_by_name(db, plan_name)
+
+            subscription = await fetch_user_subscription(db, user_id)
+
+            if subscription and plan_obj:
+                subscription.plan_id = plan_obj.id
+                subscription.status = SubscriptionStatus.ACTIVE
+                subscription.stripe_customer_id = stripe_customer
+                subscription.stripe_subscription_id = stripe_sub
+
+                period_end = session_data.get("current_period_end") or (
+                    int(datetime.now(timezone.utc).timestamp()) + 2592000
+                )
+
+                subscription.current_period_end = datetime.fromtimestamp(
+                    period_end, timezone.utc
+                ).replace(tzinfo=None)
+
+                subscription.updated_at = datetime.now(timezone.utc).replace(
+                    tzinfo=None
+                )
+
+                await db.commit()
+                print(
+                    f"✅ Webhook processed: Synchronized User ID {user_id} with Stripe Subscription {stripe_sub}"
+                )
+
+    # Handle cancellations instantly
+    elif event_type == "customer.subscription.deleted":
+        stripe_sub = session_data.get("id")
+
+        # Locate the subscription record locally via the unique Stripe key
+        sub_res = await db.execute(
+            select(UserSubscription).filter(
+                UserSubscription.stripe_subscription_id == stripe_sub
+            )
+        )
+        subscription = sub_res.scalars().first()
+
+        if subscription:
+            # Revert the user safely to the FREE tier template
+            free_plan = await fetch_subscription_plan_by_name(db, PlanName.FREE)
+
+            subscription.plan_id = free_plan.id
+            subscription.status = "canceled"
+            subscription.stripe_subscription_id = (
+                None  # Clear out the expired subscription pointer
+            )
+            subscription.current_period_end = None  # Free plan does not expire
+            subscription.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            await db.commit()
+            print(f"ℹ️ Subscription {stripe_sub} canceled. User dropped back to FREE.")
+
+    return BaseResponse(
+        success=True, message="Webhook processed successfully.", data=None
+    )
+
+
+@app.delete(
+    "/user/account", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
+)
+async def soft_delete_user_account(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """
+    Soft deletes the authenticated user profile and requests immediate
+    subscription cancellation from Stripe if an active contract token exists.
+    """
+    # Look up their active subscription record context
+    user_sub = await fetch_user_subscription(db, str(current_user.id))
+
+    if user_sub and user_sub.stripe_subscription_id:
+        try:
+            # Cancel the subscription immediately at the end of the current billing period
+            Subscription.modify(
+                id=user_sub.stripe_subscription_id,
+                api_key=settings.STRIPE_SECRET_KEY,
+                cancel_at_period_end=True,
+            )
+
+            # Update local subscription status visibility state
+            user_sub.status = SubscriptionStatus.CANCELED
+            user_sub.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        except Exception as stripe_err:
+            print(f"⚠️ Non-blocking Stripe cancel log exception: {str(stripe_err)}")
+
+    # Apply the Soft Delete timestamp mark to the User model record
+    current_user.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    await db.commit()
+
+    return BaseResponse(
+        success=True,
+        message="Your profile has been successfully deactivated, and your subscription cancellation is pending.",
+        data="Deactivation complete.",
+    )
+
+
+@app.patch(
+    "/user/account", response_model=BaseResponse[dict], status_code=status.HTTP_200_OK
+)
+async def update_user_account(
+    payload: UserProfilePatchRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    update_data = payload.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update.",
+        )
+
+    # Process the Base64 Image string if present
+    if "profile_image" in update_data and update_data["profile_image"]:
+        base64_str = update_data["profile_image"]
+
+        try:
+            # Split the header (e.g., "data:image/png;base64,") from the actual data
+            if "," in base64_str:
+                header, base64_str = base64_str.split(",", 1)
+            else:
+                header = "data:image/png;base64"
+
+            # Determine the file extension dynamically (png, jpeg, webp)
+            ext = ".png"  # default fallback
+            if "image/jpeg" in header or "image/jpg" in header:
+                ext = ".jpg"
+            elif "image/webp" in header:
+                ext = ".webp"
+
+            # Decode the text back into binary file data
+            image_data = base64.b64decode(base64_str)
+
+            # Enforce a max file size limit defensively (e.g., 5MB max)
+            if len(image_data) > 5 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Image size exceeds the 5MB limit.",
+                )
+
+            # Create a unique filename and file path for Plesk storage
+            unique_filename = f"{current_user.id}{ext}"
+            file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+            # Write the binary data to your Plesk server directory disk
+            with open(file_path, "wb") as f:
+                f.write(image_data)
+
+            # Update the database field to point to the local static URL path string
+            current_user.profile_image = f"/static/profile_images/{unique_filename}"
+
+        except Exception as err:
+            if isinstance(err, HTTPException):
+                raise err
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Base64 image data payload.",
+            )
+
+    if "first_name" in update_data:
+        current_user.first_name = update_data["first_name"]
+    if "last_name" in update_data:
+        current_user.last_name = update_data["last_name"]
+
+    current_user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    return BaseResponse(
+        success=True,
+        message="Profile updated successfully.",
+        data={
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "first_name": current_user.first_name,
+            "last_name": current_user.last_name,
+            "profile_image": current_user.profile_image,
+        },
     )

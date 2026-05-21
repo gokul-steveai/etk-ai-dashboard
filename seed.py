@@ -3,12 +3,13 @@ import os
 import sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from sqlalchemy import select
+
 from database import AsyncSessionLocal, engine
 from models import SubscriptionPlan
 from schemas import PlanName
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 async def seed_subscription_plans():

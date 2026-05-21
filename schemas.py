@@ -1,8 +1,9 @@
+from datetime import datetime
 from enum import StrEnum
+from typing import Any, Dict, Generic, List, Optional, TypeVar
+from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
-from uuid import UUID
-from typing import Any, Dict, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
@@ -66,6 +67,10 @@ class BaseResponse(BaseModel, Generic[T]):
     data: Optional[T] = None
 
 
+class BillingPlan(StrEnum):
+    BASIC = "BASIC"
+
+
 class PlanName(StrEnum):
     FREE = "FREE"
     BASIC = "BASIC"
@@ -89,17 +94,23 @@ class UserPlanData(BaseModel):
     features: Dict[str, Any]
 
 
-class UserData(BaseModel):
+class UserProfile(BaseModel):
     id: str
     email: str
+    profile_image: str
+    first_name: str
+    last_name: str
+    created_at: datetime
+
+
+class UserData(UserProfile):
     subscription: UserPlanData
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user_id: str
-    email: str
+    user: UserProfile
     subscription: UserPlanData
 
 
@@ -143,3 +154,43 @@ class CompanyProfileCreate(BaseModel):
 
 class UserIdRequest(BaseModel):
     user_id: UUID
+
+
+class DashboardInvoiceItem(BaseModel):
+    id: str
+    number: str
+    amount_paid: float
+    currency: str
+    status: str
+    created_at: datetime
+    invoice_pdf: Optional[str] = None
+    hosted_invoice_url: Optional[str] = None
+
+
+class UnifiedBillingDashboardData(BaseModel):
+    # Plan
+    plan_name: PlanName
+    status: SubscriptionStatus
+    current_period_start: datetime
+    current_period_end: Optional[datetime] = None
+    max_saved_queries: int
+    max_compare_countries: int
+    features: dict
+
+    # History
+    billing_history: List[DashboardInvoiceItem]
+
+
+class UserProfilePatchRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    profile_image: Optional[str] = None  # Base64
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "first_name": "John",
+                "last_name": "Doe",
+                "profile_image": "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
+            }
+        }
