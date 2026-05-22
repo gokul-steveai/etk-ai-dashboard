@@ -488,9 +488,9 @@ async def get_current_user_info(
     )
 
 
-@app.delete(
-    "/user/account", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
-)
+# @app.delete(
+#     "/user/account", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
+# )
 async def soft_delete_user_account(
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
