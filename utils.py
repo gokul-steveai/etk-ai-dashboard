@@ -43,6 +43,7 @@ async def find_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
 async def fetch_user_subscription(
     db: AsyncSession, user_id: str
 ) -> UserSubscription | None:
+    """Fetches the UserSubscription mapping for a given user ID, returning the full SQLAlchemy model instance."""
     sub_res = await db.execute(
         select(UserSubscription).filter(UserSubscription.user_id == user_id)
     )
@@ -52,10 +53,23 @@ async def fetch_user_subscription(
 async def fetch_subscription_plan_by_name(
     db: AsyncSession, plan_name: PlanName
 ) -> SubscriptionPlan | None:
+    """Fetches a subscription plan by its enumerated name, returning the full SQLAlchemy model instance."""
     plan_res = await db.execute(
         select(SubscriptionPlan).filter(SubscriptionPlan.name == plan_name)
     )
     return plan_res.scalars().first()
+
+
+async def fetch_user_subscription_by_sub_id(
+    db: AsyncSession, sub_id: str
+) -> UserSubscription | None:
+    """Fetches a user subscription by Stripe subscription ID."""
+    sub_res = await db.execute(
+        select(UserSubscription).filter(
+            UserSubscription.stripe_subscription_id == sub_id
+        )
+    )
+    return sub_res.scalars().first()
 
 
 async def ensure_user_has_free_plan(db: AsyncSession, user_id: str) -> None:

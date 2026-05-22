@@ -6,7 +6,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,20 +14,19 @@ from google.auth.transport import requests as google_requests
 from google.oauth2.id_token import verify_oauth2_token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from stripe import SignatureVerificationError, Subscription, Webhook
+from stripe import Subscription
 
 from auth import generate_otp, hash_password, send_email, verify_password
 from billing import router as billing_router
 from config import settings
 from database import engine, get_db
-from models import Base, CompanyProfile, User, UserSubscription
+from models import Base, CompanyProfile, User
 from schemas import (
     BaseResponse,
     CompanyProfileCreate,
     ForgotPassword,
     GoogleAuthRequest,
     LinkedInAuthRequest,
-    PlanName,
     ProfileData,
     ResetPassword,
     SubscriptionStatus,
@@ -38,7 +37,6 @@ from schemas import (
     UserProfilePatchRequest,
 )
 from utils import (
-    fetch_subscription_plan_by_name,
     fetch_user_subscription,
     find_user_by_email,
     find_user_by_id,
@@ -85,6 +83,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     status_code=status.HTTP_200_OK,
 )
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    """Registers a new user, ensuring email uniqueness, and returns an authentication token along with subscription details."""
+
     existing_user = await find_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(
@@ -105,6 +105,7 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     status_code=status.HTTP_200_OK,
 )
 async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
+    """Authenticates a user by email and password, enforcing plan checks, and returns an authentication token along with subscription details."""
     db_user = await find_user_by_email(db, user.email)
     if not db_user or not verify_password(user.password, db_user.password):
         raise HTTPException(
@@ -118,6 +119,7 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
     "/forgot-password", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
 )
 async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_db)):
+    """Initiates the forgot password flow by generating a time-limited OTP and sending it to the user's email."""
     user = await find_user_by_email(db, data.email)
 
     if not user:
@@ -141,6 +143,7 @@ async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_d
     "/reset-password", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
 )
 async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)):
+    """Resets the user's password using the provided OTP."""
     user = await find_user_by_email(db, data.email)
 
     if not user:
@@ -182,6 +185,7 @@ async def create_company_profile(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Creates or updates the company profile and user interests for the authenticated user."""
     try:
         if not current_user or current_user.id != data.user_id:
             raise HTTPException(
@@ -297,6 +301,7 @@ async def handle_oauth_user_provisioning(
 async def google_authentication(
     payload: GoogleAuthRequest, db: AsyncSession = Depends(get_db)
 ):
+    """Receives the Google ID token from the frontend, validates it against Google's token verification API, and delegates user provisioning to the shared authentication layer."""
     if not payload.id_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -387,6 +392,10 @@ async def get_user_interests(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Fetches the user's profile data from the database and returns it as a dictionary.
+    If the user has no profile, returns a default empty profile structure.
+    """
     try:
         try:
             if not user_id or current_user.id != user_id:
@@ -479,100 +488,6 @@ async def get_current_user_info(
     )
 
 
-@app.post("/webhook")
-async def stripe_webhook(
-    request: Request,
-    stripe_signature: str = Header(None),
-    db: AsyncSession = Depends(get_db),
-) -> BaseResponse[str]:
-    payload = await request.body()
-
-    try:
-        event = Webhook.construct_event(
-            payload=payload,
-            sig_header=stripe_signature,
-            secret=settings.STRIPE_WEBHOOK_SECRET,
-            api_key=settings.STRIPE_SECRET_KEY,
-        )
-    except (ValueError, SignatureVerificationError) as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid signature verification.",
-        )
-
-    event_type = event["type"]
-    session_data = event["data"]["object"]
-
-    # Process successful checkout activations and updates
-    if event_type in ["checkout.session.completed", "invoice.payment_succeeded"]:
-        metadata = session_data.get("metadata", {})
-        user_id = metadata.get("user_id")
-        plan_name = metadata.get("plan_name", PlanName.BASIC)
-
-        # Pull core structural transaction tracking hashes directly from Stripe's payload object
-        stripe_customer = session_data.get("customer")
-        stripe_sub = session_data.get("subscription")
-
-        if user_id:
-            plan_obj = await fetch_subscription_plan_by_name(db, plan_name)
-
-            subscription = await fetch_user_subscription(db, user_id)
-
-            if subscription and plan_obj:
-                subscription.plan_id = plan_obj.id
-                subscription.status = SubscriptionStatus.ACTIVE
-                subscription.stripe_customer_id = stripe_customer
-                subscription.stripe_subscription_id = stripe_sub
-
-                period_end = session_data.get("current_period_end") or (
-                    int(datetime.now(timezone.utc).timestamp()) + 2592000
-                )
-
-                subscription.current_period_end = datetime.fromtimestamp(
-                    period_end, timezone.utc
-                ).replace(tzinfo=None)
-
-                subscription.updated_at = datetime.now(timezone.utc).replace(
-                    tzinfo=None
-                )
-
-                await db.commit()
-                print(
-                    f"✅ Webhook processed: Synchronized User ID {user_id} with Stripe Subscription {stripe_sub}"
-                )
-
-    # Handle cancellations instantly
-    elif event_type == "customer.subscription.deleted":
-        stripe_sub = session_data.get("id")
-
-        # Locate the subscription record locally via the unique Stripe key
-        sub_res = await db.execute(
-            select(UserSubscription).filter(
-                UserSubscription.stripe_subscription_id == stripe_sub
-            )
-        )
-        subscription = sub_res.scalars().first()
-
-        if subscription:
-            # Revert the user safely to the FREE tier template
-            free_plan = await fetch_subscription_plan_by_name(db, PlanName.FREE)
-
-            subscription.plan_id = free_plan.id
-            subscription.status = "canceled"
-            subscription.stripe_subscription_id = (
-                None  # Clear out the expired subscription pointer
-            )
-            subscription.current_period_end = None  # Free plan does not expire
-            subscription.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-            await db.commit()
-            print(f"ℹ️ Subscription {stripe_sub} canceled. User dropped back to FREE.")
-
-    return BaseResponse(
-        success=True, message="Webhook processed successfully.", data=None
-    )
-
-
 @app.delete(
     "/user/account", response_model=BaseResponse[str], status_code=status.HTTP_200_OK
 )
@@ -621,6 +536,7 @@ async def update_user_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Updates the authenticated user profile. Handles Base64 image uploads and updates profile fields accordingly."""
     update_data = payload.model_dump(exclude_unset=True)
 
     if not update_data:
