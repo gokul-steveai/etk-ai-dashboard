@@ -32,9 +32,6 @@ router = APIRouter(
 )
 
 
-STRIPE_PRICES: dict[BillingPlan, str] = {"BASIC": "price_1TZQKXCT0zz3DDk5VsjtZB3A"}
-
-
 @router.post("/create-checkout-session")
 async def create_checkout_session(
     plan: BillingPlan,
