@@ -2,15 +2,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Database configuration
+    DATABASE_URL: str
+
+    # Email configuration
     EMAIL_USER: str
     EMAIL_PASS: str
-    DATABASE_URL: str
-    GOOGLE_CLIENT_ID: str
+
+    # Authentication configuration
     SECRET_KEY: str = "TheSecretKey"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    STRIPE_SECRET_KEY: str
+    GOOGLE_CLIENT_ID: str
+
+    # Stripe configuration
     FRONTEND_URL: str = "http://localhost:3000"
+    STRIPE_SECRET_KEY: str
     STRIPE_WEBHOOK_SECRET: str | None
 
     model_config = SettingsConfigDict(
@@ -20,8 +27,4 @@ class Settings(BaseSettings):
     )
 
 
-def load_config() -> Settings:
-    return Settings()
-
-
-settings = load_config()
+settings = Settings()
