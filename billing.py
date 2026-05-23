@@ -21,6 +21,7 @@ from utils import (
     fetch_subscription_by_id,
     fetch_subscription_plan_by_name,
     fetch_user_subscription,
+    fetch_user_subscription_by_sub_id,
     get_current_user,
     get_user_active_plan,
 )
@@ -83,7 +84,9 @@ async def create_checkout_session(
                 await db.commit()
 
         frontend_base_url = settings.FRONTEND_URL.rstrip("/")
-        dynamic_success_url = f"{frontend_base_url}/dashboard/billing/success?session_id={{CHECKOUT_SESSION_ID}}"
+        dynamic_success_url = (
+            f"{frontend_base_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+        )
 
         # Create the checkout session
         session = Session.create(
@@ -100,6 +103,8 @@ async def create_checkout_session(
                 "plan": sub_plan.name.upper(),
             },
             success_url=dynamic_success_url,
+            customer=stripe_customer_id if stripe_customer_id else None,
+            customer_email=current_user.email if not stripe_customer_id else None,
             # cancel_url=settings.STRIPE_CANCEL_URL,
         )
 
@@ -143,6 +148,7 @@ async def get_unified_billing_dashboard(
                 limit=24,
                 api_key=settings.STRIPE_SECRET_KEY,
             )
+
             for inv in invoices.data:
                 invoice_history.append(
                     DashboardInvoiceItem(

@@ -61,12 +61,12 @@ async def fetch_subscription_plan_by_name(
 
 
 async def fetch_user_subscription_by_sub_id(
-    db: AsyncSession, sub_id: str
+    db: AsyncSession, stripe_subscription_id: str
 ) -> UserSubscription | None:
     """Fetches a user subscription by Stripe subscription ID."""
     sub_res = await db.execute(
         select(UserSubscription).filter(
-            UserSubscription.stripe_subscription_id == sub_id
+            UserSubscription.stripe_subscription_id == stripe_subscription_id
         )
     )
     return sub_res.scalars().first()
