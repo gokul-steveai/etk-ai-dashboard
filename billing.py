@@ -12,16 +12,15 @@ from database import get_db
 from models import User
 from schemas import (
     BaseResponse,
-    BillingPlan,
     DashboardInvoiceItem,
     PlanName,
     SubscriptionStatus,
     UnifiedBillingDashboardData,
 )
 from utils import (
+    fetch_subscription_by_id,
     fetch_subscription_plan_by_name,
     fetch_user_subscription,
-    fetch_user_subscription_by_sub_id,
     get_current_user,
     get_user_active_plan,
 )
@@ -34,7 +33,7 @@ router = APIRouter(
 
 @router.post("/create-checkout-session")
 async def create_checkout_session(
-    plan: BillingPlan,
+    subscription_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -43,11 +42,23 @@ async def create_checkout_session(
     the active customer context dynamically via database Price IDs.
     """
 
-    sub_plan = await fetch_subscription_plan_by_name(db, plan)
+    sub_plan = await fetch_subscription_by_id(db, subscription_id)
     if not sub_plan or not sub_plan.stripe_price_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Requested plan is either invalid or does not require a billing session.",
+            detail="Requested plan is either invalid or unavailable.",
+        )
+
+    # Check if the user is already subscribed to the plan
+    user_sub = await fetch_user_subscription(db, str(current_user.id))
+    if (
+        user_sub
+        and user_sub.stripe_subscription_id == subscription_id
+        and user_sub.status == SubscriptionStatus.ACTIVE
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are already subscribed to this plan.",
         )
 
     # Check if the user already possesses a Stripe Customer ID token
@@ -58,8 +69,6 @@ async def create_checkout_session(
     try:
         # If the user doesn't have a Customer ID yet, create one in Stripe
         if not stripe_customer_id:
-            frontend_base_url = settings.FRONTEND_URL.rstrip("/")
-            dynamic_success_url = f"{frontend_base_url}/dashboard/billing/success?session_id={{CHECKOUT_SESSION_ID}}"
 
             customer = Customer.create(
                 api_key=settings.STRIPE_SECRET_KEY,
@@ -73,6 +82,9 @@ async def create_checkout_session(
                 user_sub.stripe_customer_id = stripe_customer_id
                 await db.commit()
 
+        frontend_base_url = settings.FRONTEND_URL.rstrip("/")
+        dynamic_success_url = f"{frontend_base_url}/dashboard/billing/success?session_id={{CHECKOUT_SESSION_ID}}"
+
         # Create the checkout session
         session = Session.create(
             api_key=settings.STRIPE_SECRET_KEY,
@@ -85,7 +97,7 @@ async def create_checkout_session(
             ],
             metadata={
                 "user_id": str(current_user.id),
-                "plan": plan.upper(),
+                "plan": sub_plan.name.upper(),
             },
             success_url=dynamic_success_url,
             # cancel_url=settings.STRIPE_CANCEL_URL,
@@ -165,6 +177,11 @@ async def get_unified_billing_dashboard(
         max_saved_queries=plan_data.max_saved_queries,
         max_compare_countries=plan_data.max_compare_countries,
         features=plan_data.features,
+        max_users=plan_data.max_users,
+        can_export=plan_data.can_export,
+        has_risk_intelligence=plan_data.has_risk_intelligence,
+        has_watchlist_access=plan_data.has_watchlist_access,
+        has_partner_access=plan_data.has_partner_access,
         billing_history=invoice_history,
     )
 

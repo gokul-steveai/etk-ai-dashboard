@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Generic, List, Optional, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -91,7 +91,13 @@ class UserPlanData(BaseModel):
     status: SubscriptionStatus
     max_saved_queries: int
     max_compare_countries: int
-    features: Dict[str, Any]
+    features: List[str]
+
+    max_users: int = 1
+    can_export: bool = False
+    has_risk_intelligence: bool = False
+    has_watchlist_access: bool = False
+    has_partner_access: bool = False
 
 
 class UserProfile(BaseModel):
@@ -173,9 +179,16 @@ class UnifiedBillingDashboardData(BaseModel):
     status: SubscriptionStatus
     current_period_start: datetime
     current_period_end: Optional[datetime] = None
-    max_saved_queries: int
-    max_compare_countries: int
-    features: dict
+    features: List[str]
+    is_active: bool = True
+
+    max_users: int = 1
+    max_saved_queries: int = 0
+    max_compare_countries: int = 0
+    can_export: bool = False
+    has_risk_intelligence: bool = False
+    has_watchlist_access: bool = False
+    has_partner_access: bool = False
 
     # History
     billing_history: List[DashboardInvoiceItem]
@@ -194,3 +207,24 @@ class UserProfilePatchRequest(BaseModel):
                 "profile_image": "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
             }
         }
+
+
+class SubscriptionPlanResponse(BaseModel):
+    id: str
+    plan_name: str
+    description: str
+    features: List[str]
+    amount: float
+    currency: str
+    interval: str
+    is_custom_pricing: bool = False
+    created_at: datetime
+    is_active: bool = True
+
+    max_users: int = 1
+    max_saved_queries: int = 0
+    max_compare_countries: int = 0
+    can_export: bool = False
+    has_risk_intelligence: bool = False
+    has_watchlist_access: bool = False
+    has_partner_access: bool = False

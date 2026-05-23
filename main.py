@@ -36,6 +36,7 @@ from schemas import (
     UserLogin,
     UserProfilePatchRequest,
 )
+from subscription import router as subscription_router
 from utils import (
     fetch_user_subscription,
     find_user_by_email,
@@ -64,6 +65,7 @@ app = FastAPI(root_path="/api", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(billing_router)
+app.include_router(subscription_router)
 
 
 @app.exception_handler(RequestValidationError)

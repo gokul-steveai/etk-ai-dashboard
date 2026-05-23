@@ -72,6 +72,18 @@ async def fetch_user_subscription_by_sub_id(
     return sub_res.scalars().first()
 
 
+async def fetch_subscription_by_id(
+    db: AsyncSession, sub_id: str
+) -> SubscriptionPlan | None:
+    """Fetches a subscription plan by its ID."""
+    plan_res = await db.execute(
+        select(SubscriptionPlan).filter(
+            SubscriptionPlan.id == sub_id, SubscriptionPlan.is_active == True
+        )
+    )
+    return plan_res.scalars().first()
+
+
 async def ensure_user_has_free_plan(db: AsyncSession, user_id: str) -> None:
     """
     Defensively updates or assigns the default FREE plan mapping
@@ -169,6 +181,11 @@ async def get_user_active_plan(db: AsyncSession, user_id: str) -> UserPlanData:
         max_saved_queries=sub.plan.max_saved_queries,
         max_compare_countries=sub.plan.max_compare_countries,
         features=sub.plan.features,
+        max_users=sub.plan.max_users or 1,
+        can_export=sub.plan.can_export or False,
+        has_risk_intelligence=sub.plan.has_risk_intelligence or False,
+        has_watchlist_access=sub.plan.has_watchlist_access or False,
+        has_partner_access=sub.plan.has_partner_access or False,
     )
 
 
