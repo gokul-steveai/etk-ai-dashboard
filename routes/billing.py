@@ -8,24 +8,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stripe import Customer, Invoice, SignatureVerificationError, Webhook
 from stripe.checkout import Session
 
-from config import settings
-from database import get_db
-from models import SubscriptionPlan, User, UserSubscription
-from schemas import (
-    BaseResponse,
+from core.config import settings
+from core.database import get_db
+from models.subscription_plan import SubscriptionPlan
+from models.user_subscription import UserSubscription
+from models.users import User
+from schemas.base import BaseResponse
+from schemas.billing import (
     DashboardInvoiceItem,
     PlanName,
     SubscriptionStatus,
     UnifiedBillingDashboardData,
 )
-from utils import (
+from utils.auth import get_current_user
+from utils.subscription import (
     fetch_subscription_by_id,
     fetch_subscription_plan_by_name,
     fetch_user_subscription,
     fetch_user_subscription_by_sub_id,
-    get_current_user,
-    get_user_active_plan,
 )
+from utils.users import get_user_active_plan
 
 router = APIRouter(
     prefix="/billing",

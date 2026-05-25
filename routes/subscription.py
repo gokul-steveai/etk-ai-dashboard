@@ -6,11 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
-from database import get_db
-from models import SubscriptionPlan, User
-from schemas import BaseResponse, PlanName, SubscriptionPlanResponse
-from utils import get_current_user
+from core.config import settings
+from core.database import get_db
+from enums import PlanName
+from models.subscription_plan import SubscriptionPlan
+from models.users import User
+from schemas.base import BaseResponse
+from schemas.billing import SubscriptionPlanResponse
+from utils.auth import get_current_user
 
 router = APIRouter(
     prefix="/subscriptions",

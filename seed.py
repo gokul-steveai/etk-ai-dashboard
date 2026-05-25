@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from database import AsyncSessionLocal, engine
-from models import SubscriptionPlan
-from schemas import PlanName
+from core.database import AsyncSessionLocal, engine
+from enums import PlanName
+from models.company_profile import SubscriptionPlan
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
