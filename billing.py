@@ -230,187 +230,204 @@ async def stripe_webhook(
     event_type = event["type"]
     session_data = event["data"]["object"]
 
-    if event_type == "checkout.session.completed":
-        metadata = session_data["metadata"] if "metadata" in session_data else {}
-        user_id = metadata["user_id"] if "user_id" in metadata else None
-        plan_name = metadata["plan"] if "plan" in metadata else str(PlanName.BASIC)
+    try:
+        if event_type == "checkout.session.completed":
+            metadata = session_data["metadata"] if "metadata" in session_data else {}
+            user_id = metadata["user_id"] if "user_id" in metadata else None
+            plan_name = metadata["plan"] if "plan" in metadata else str(PlanName.BASIC)
 
-        stripe_customer = (
-            session_data["customer"] if "customer" in session_data else None
-        )
-        stripe_sub = (
-            session_data["subscription"] if "subscription" in session_data else None
-        )
+            stripe_customer = (
+                session_data["customer"] if "customer" in session_data else None
+            )
+            stripe_sub = (
+                session_data["subscription"] if "subscription" in session_data else None
+            )
 
-        if user_id and stripe_sub:
-            plan_obj = await fetch_subscription_plan_by_name(db, plan_name)
-            subscription = await fetch_user_subscription(db, user_id)
+            if user_id and stripe_sub:
+                plan_obj = await fetch_subscription_plan_by_name(db, plan_name)
+                subscription = await fetch_user_subscription(db, user_id)
 
-            if subscription and plan_obj:
-                subscription.plan_id = plan_obj.id
-                subscription.status = SubscriptionStatus.ACTIVE
-                subscription.stripe_customer_id = stripe_customer
-                subscription.stripe_subscription_id = stripe_sub
-                subscription.updated_at = datetime.now(timezone.utc).replace(
-                    tzinfo=None
-                )
+                if subscription and plan_obj:
+                    subscription.plan_id = plan_obj.id
+                    subscription.status = SubscriptionStatus.ACTIVE
+                    subscription.stripe_customer_id = stripe_customer
+                    subscription.stripe_subscription_id = stripe_sub
+                    subscription.updated_at = datetime.now(timezone.utc).replace(
+                        tzinfo=None
+                    )
 
-                await db.commit()
-                print(
-                    f"[INFO] Webhook [checkout.session.completed] - Provisioned User ID: {user_id} with Sub ID: {stripe_sub}"
-                )
+                    await db.commit()
+                    print(
+                        f"[INFO] Webhook [checkout.session.completed] - Provisioned User ID: {user_id} with Sub ID: {stripe_sub}"
+                    )
 
-    elif event_type == "invoice.payment_succeeded":
-        stripe_sub = None
-        customer_id = session_data["customer"] if "customer" in session_data else None
-        customer_email = (
-            session_data["customer_email"] if "customer_email" in session_data else None
-        )
-
-        if (
-            "lines" in session_data
-            and "data" in session_data["lines"]
-            and len(session_data["lines"]["data"]) > 0
-        ):
-            first_line = session_data["lines"]["data"][0]
-            if (
-                "parent" in first_line
-                and "subscription_item_details" in first_line["parent"]
-            ):
-                stripe_sub = (
-                    first_line["parent"]["subscription_item_details"]["subscription"]
-                    if "subscription_item_details" in first_line["parent"]
-                    else None
-                )
-                stripe_price_id = (
-                    first_line["pricing"]["price_details"]["price"]
-                    if "price_details" in first_line["pricing"]
-                    else None
-                )
-
-        # Fallback tracking paths
-        if (
-            not stripe_sub
-            and "parent" in session_data
-            and session_data["parent"] is not None
-        ):
-            sub_details = (
-                session_data["parent"]["subscription_details"]
-                if "subscription_details" in session_data["parent"]
+        elif event_type == "invoice.payment_succeeded":
+            stripe_sub = None
+            customer_id = (
+                session_data["customer"] if "customer" in session_data else None
+            )
+            customer_email = (
+                session_data["customer_email"]
+                if "customer_email" in session_data
                 else None
             )
-            stripe_sub = sub_details["subscription"] if sub_details else None
 
-        if stripe_sub:
-            # Extract structural period timestamps
-            period_end = int(datetime.now(timezone.utc).timestamp()) + 2592000
-            if "lines" in session_data and "data" in session_data["lines"]:
-                periods = [
-                    line["period"]["end"]
-                    for line in session_data["lines"]["data"]
-                    if "period" in line and "end" in line["period"]
-                ]
-                if periods:
-                    period_end = max(periods)
+            if (
+                "lines" in session_data
+                and "data" in session_data["lines"]
+                and len(session_data["lines"]["data"]) > 0
+            ):
+                first_line = session_data["lines"]["data"][0]
+                if (
+                    "parent" in first_line
+                    and "subscription_item_details" in first_line["parent"]
+                ):
+                    stripe_sub = (
+                        first_line["parent"]["subscription_item_details"][
+                            "subscription"
+                        ]
+                        if "subscription_item_details" in first_line["parent"]
+                        else None
+                    )
+                    stripe_price_id = (
+                        first_line["pricing"]["price_details"]["price"]
+                        if "price_details" in first_line["pricing"]
+                        else None
+                    )
 
-            target_period_date = datetime.fromtimestamp(
-                period_end, timezone.utc
-            ).replace(tzinfo=None)
+            # Fallback tracking paths
+            if (
+                not stripe_sub
+                and "parent" in session_data
+                and session_data["parent"] is not None
+            ):
+                sub_details = (
+                    session_data["parent"]["subscription_details"]
+                    if "subscription_details" in session_data["parent"]
+                    else None
+                )
+                stripe_sub = sub_details["subscription"] if sub_details else None
 
-            # Attempt to fetch the existing row
+            if stripe_sub:
+                # Extract structural period timestamps
+                period_end = int(datetime.now(timezone.utc).timestamp()) + 2592000
+                if "lines" in session_data and "data" in session_data["lines"]:
+                    periods = [
+                        line["period"]["end"]
+                        for line in session_data["lines"]["data"]
+                        if "period" in line and "end" in line["period"]
+                    ]
+                    if periods:
+                        period_end = max(periods)
+
+                target_period_date = datetime.fromtimestamp(
+                    period_end, timezone.utc
+                ).replace(tzinfo=None)
+
+                # Attempt to fetch the existing row
+                subscription = await fetch_user_subscription_by_sub_id(db, stripe_sub)
+
+                if subscription:
+                    # 🔄 Row already exists, just extend time
+                    subscription.status = SubscriptionStatus.ACTIVE
+                    subscription.current_period_end = target_period_date
+                    subscription.updated_at = datetime.now(timezone.utc).replace(
+                        tzinfo=None
+                    )
+                    await db.commit()
+                    print(
+                        f"[INFO] Webhook [invoice.payment_succeeded] - Subscription {stripe_sub} extended until {target_period_date}"
+                    )
+
+                else:
+                    # 🛡️ Row doesn't exist yet because checkout.session hasn't completed!
+                    print(
+                        f"[INFO] Webhook [invoice.payment_succeeded] - Subscription record missing. Provisioning dynamically..."
+                    )
+
+                    # Find the user by their Stripe Customer ID
+                    user_stmt = await db.execute(
+                        select(UserSubscription).where(
+                            (UserSubscription.stripe_customer_id == customer_id)
+                        )
+                    )
+                    user = user_stmt.scalars().first()
+
+                    if user:
+                        # Update their customer ID if it wasn't saved yet
+                        if not user.stripe_customer_id:
+                            user.stripe_customer_id = customer_id
+
+                        # Look up which plan maps to the incoming Stripe Price ID
+                        plan_stmt = await db.execute(
+                            select(SubscriptionPlan).where(
+                                SubscriptionPlan.stripe_price_id == stripe_price_id
+                            )
+                        )
+                        plan_row = plan_stmt.scalars().first()
+
+                        if plan_row:
+                            new_subscription = UserSubscription(
+                                user_id=user.id,
+                                plan_id=plan_row.id,
+                                stripe_subscription_id=stripe_sub,
+                                status=SubscriptionStatus.ACTIVE,
+                                current_period_end=target_period_date,
+                            )
+                            db.add(new_subscription)
+                            await db.commit()
+                            print(
+                                f"[SUCCESS] Webhook [invoice.payment_succeeded] - Dynamically provisioned subscription for user {user.id}"
+                            )
+                        else:
+                            print(
+                                f"[ERROR] Price ID {stripe_price_id} could not be mapped to any local plan."
+                            )
+                    else:
+                        print(
+                            f"[ERROR] No local user accounts found matching email {customer_email} or customer ID {customer_id}"
+                        )
+
+        elif event_type == "customer.subscription.updated":
+            stripe_sub = session_data["id"]
             subscription = await fetch_user_subscription_by_sub_id(db, stripe_sub)
 
             if subscription:
-                # 🔄 Row already exists, just extend time
-                subscription.status = SubscriptionStatus.ACTIVE
-                subscription.current_period_end = target_period_date
+                new_status = session_data["status"]
+                subscription.status = SubscriptionStatus(new_status.upper())
                 subscription.updated_at = datetime.now(timezone.utc).replace(
                     tzinfo=None
                 )
+
                 await db.commit()
                 print(
-                    f"[INFO] Webhook [invoice.payment_succeeded] - Subscription {stripe_sub} extended until {target_period_date}"
+                    f"[INFO] Webhook [customer.subscription.updated] - Subscription {stripe_sub} marked as {new_status}"
                 )
 
-            else:
-                # 🛡️ Row doesn't exist yet because checkout.session hasn't completed!
+        elif event_type == "customer.subscription.deleted":
+            stripe_sub = session_data["id"]
+            subscription = await fetch_user_subscription_by_sub_id(db, stripe_sub)
+
+            if subscription:
+                free_plan = await fetch_subscription_plan_by_name(db, PlanName.FREE)
+                subscription.plan_id = free_plan.id
+                subscription.status = SubscriptionStatus.CANCELED
+                subscription.stripe_subscription_id = None
+                subscription.current_period_end = None
+                subscription.updated_at = datetime.now(timezone.utc).replace(
+                    tzinfo=None
+                )
+
+                await db.commit()
                 print(
-                    f"[INFO] Webhook [invoice.payment_succeeded] - Subscription record missing. Provisioning dynamically..."
+                    f"[WARN] Webhook [customer.subscription.deleted] - Subscription {stripe_sub} canceled. User dropped to FREE tier."
                 )
-
-                # Find the user by their Stripe Customer ID
-                user_stmt = await db.execute(
-                    select(UserSubscription).where(
-                        (UserSubscription.stripe_customer_id == customer_id)
-                    )
-                )
-                user = user_stmt.scalars().first()
-
-                if user:
-                    # Update their customer ID if it wasn't saved yet
-                    if not user.stripe_customer_id:
-                        user.stripe_customer_id = customer_id
-
-                    # Look up which plan maps to the incoming Stripe Price ID
-                    plan_stmt = await db.execute(
-                        select(SubscriptionPlan).where(
-                            SubscriptionPlan.stripe_price_id == stripe_price_id
-                        )
-                    )
-                    plan_row = plan_stmt.scalars().first()
-
-                    if plan_row:
-                        new_subscription = UserSubscription(
-                            user_id=user.id,
-                            plan_id=plan_row.id,
-                            stripe_subscription_id=stripe_sub,
-                            status=SubscriptionStatus.ACTIVE,
-                            current_period_end=target_period_date,
-                        )
-                        db.add(new_subscription)
-                        await db.commit()
-                        print(
-                            f"[SUCCESS] Webhook [invoice.payment_succeeded] - Dynamically provisioned subscription for user {user.id}"
-                        )
-                    else:
-                        print(
-                            f"[ERROR] Price ID {stripe_price_id} could not be mapped to any local plan."
-                        )
-                else:
-                    print(
-                        f"[ERROR] No local user accounts found matching email {customer_email} or customer ID {customer_id}"
-                    )
-
-    elif event_type == "customer.subscription.updated":
-        stripe_sub = session_data["id"]
-        subscription = await fetch_user_subscription_by_sub_id(db, stripe_sub)
-
-        if subscription:
-            new_status = session_data["status"]
-            subscription.status = SubscriptionStatus(new_status.upper())
-            subscription.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-            await db.commit()
-            print(
-                f"[INFO] Webhook [customer.subscription.updated] - Subscription {stripe_sub} marked as {new_status}"
-            )
-
-    elif event_type == "customer.subscription.deleted":
-        stripe_sub = session_data["id"]
-        subscription = await fetch_user_subscription_by_sub_id(db, stripe_sub)
-
-        if subscription:
-            free_plan = await fetch_subscription_plan_by_name(db, PlanName.FREE)
-            subscription.plan_id = free_plan.id
-            subscription.status = SubscriptionStatus.CANCELED
-            subscription.stripe_subscription_id = None
-            subscription.current_period_end = None
-            subscription.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-            await db.commit()
-            print(
-                f"[WARN] Webhook [customer.subscription.deleted] - Subscription {stripe_sub} canceled. User dropped to FREE tier."
-            )
+    except Exception as e:
+        print(f"❌ Webhook processing error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the webhook.",
+        )
 
     return BaseResponse(
         success=True, message="Webhook processed successfully.", data=None

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # Authentication configuration
     SECRET_KEY: str = "TheSecretKey"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
     GOOGLE_CLIENT_ID: str
 
     # Stripe configuration
