@@ -118,7 +118,6 @@ etk/
 | PATCH | `/user/account` | Update user profile (name, profile image) | ✅ JWT |
 | GET | `/user/profile` | Get authenticated user's profile | ✅ JWT |
 | GET | `/user/details` | Get user details with subscription info | ✅ JWT |
-| DELETE | `/user/account` | Delete user account | ✅ JWT |
 
 **Profile Update Request:**
 ```json
@@ -133,8 +132,7 @@ etk/
 
 | Method | Endpoint | Description | Auth Required |
 |--------|----------|-------------|----------------|
-| GET | `/subscriptions` | List all available subscription plans | ❌ |
-| GET | `/subscriptions/active` | Get user's active subscription | ✅ JWT |
+| GET | `/subscriptions` | List all available subscription plans | Yes |
 
 **Plan Response Example:**
 ```json
