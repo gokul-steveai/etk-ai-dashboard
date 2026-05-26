@@ -22,7 +22,10 @@ from utils.users import (
     get_user_active_plan,
 )
 
+# Set up password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Define the security scheme for FastAPI's dependency injection
 security_scheme = HTTPBearer()
 
 
@@ -60,6 +63,7 @@ async def get_current_user(
 
 # JWT token creation
 def create_access_token(data: dict):
+    """Creates a JWT access token with an expiration time."""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
@@ -83,26 +87,32 @@ def verify_token(token: str) -> dict | None:
 
 
 def preprocess_password(password: str):
+    """Preprocesses the password by hashing it with SHA-256 before applying bcrypt."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 
 def hash_password(password: str):
+    """Hashes the password using bcrypt after preprocessing it with SHA-256."""
     password = preprocess_password(password)
     return pwd_context.hash(password)
 
 
 def verify_password(plain, hashed):
+    """Verifies the password by preprocessing it and then comparing it to the hashed version."""
     plain = preprocess_password(plain)
     return pwd_context.verify(plain, hashed)
 
 
 # Generate OTP
 def generate_otp():
+    """Generates a 6-digit OTP."""
     return str(random.randint(100000, 999999))
 
 
 # Send Email
 def send_email(to_email, otp):
+    """Sends an email with the OTP to the provided email address."""
+
     subject = "Password Reset OTP"
     body = f"Your OTP is: {otp}"
 
@@ -138,8 +148,6 @@ async def generate_auth_response(
         success=True,
         message=message,
         data=TokenResponse(
-            user_id=str(user.id),
-            email=user.email,
             access_token=access_token,
             token_type="bearer",
             subscription=subscription_data,

@@ -1,62 +1,131 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import EmailStr, Field
 
+from schemas.base import BaseSchema
 from schemas.subscription import UserPlanData
 from schemas.users import UserProfile
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
+class EmailSchema(BaseSchema):
+    """Reusable email schema."""
 
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    message: str
-
-
-class ForgotPassword(BaseModel):
-    email: EmailStr
-
-
-class ResetPassword(BaseModel):
-    email: EmailStr
-    otp: str
-    new_password: str
-
-
-class GoogleAuthRequest(BaseModel):
-    """Request payload for Google login."""
-
-    id_token: str = Field(
-        ..., description="The cryptographically signed ID token from NextAuth/Auth.js"
+    email: EmailStr = Field(
+        ...,
+        description="Registered user email address",
+        examples=["joe@gmail.com"],
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {"id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImU0N..."}
-        }
+
+class AuthSchema(EmailSchema):
+    """Base authentication schema."""
+
+    password: str = Field(
+        ...,
+        min_length=8,
+        description="User account password",
+        examples=["StrongPassword@123"],
+    )
 
 
-class LinkedInAuthRequest(BaseModel):
-    """Request payload for LinkedIn login."""
+class UserCreate(AuthSchema):
+    """Schema for user registration."""
+
+    pass
+
+
+class UserLogin(AuthSchema):
+    """Schema for user login."""
+
+    pass
+
+
+class ForgotPassword(EmailSchema):
+    """Schema for forgot password request."""
+
+    pass
+
+
+class ResetPassword(EmailSchema):
+    """Schema for password reset."""
+
+    otp: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        description="OTP sent to the user's email",
+        examples=["123456"],
+    )
+
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        description="New account password",
+        examples=["NewStrongPassword@123"],
+    )
+
+
+class OAuthTokenSchema(BaseSchema):
+    """Reusable OAuth token schema."""
+
+    token: str = Field(
+        ...,
+        description="OAuth provider token",
+    )
+
+
+class GoogleAuthRequest(OAuthTokenSchema):
+    """Schema for Google authentication."""
+
+    token: str = Field(
+        ...,
+        alias="id_token",
+        description="Google OAuth ID token",
+        examples=["eyJhbGciOiJSUzI1NiIsImtpZCI6ImU0N..."],
+    )
+
+
+class LinkedInAuthRequest(OAuthTokenSchema):
+    """Schema for LinkedIn authentication."""
+
+    token: str = Field(
+        ...,
+        alias="access_token",
+        description="LinkedIn OAuth access token",
+        examples=["AQX4_abc123XYZ..."],
+    )
+
+
+class BaseTokenResponse(BaseSchema):
+    """Reusable token response schema."""
 
     access_token: str = Field(
         ...,
-        description="The access token returned by NextAuth/Auth.js from the LinkedIn provider",
+        description="JWT access token",
     )
 
-    class Config:
-        json_schema_extra = {"example": {"access_token": "AQX4_abc123XYZ..."}}
+    token_type: str = Field(
+        default="bearer",
+        description="Authentication token type",
+    )
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserProfile
-    subscription: UserPlanData
+class Token(BaseTokenResponse):
+    """Basic authentication response."""
+
+    message: str = Field(
+        ...,
+        description="Authentication response message",
+    )
+
+
+class TokenResponse(BaseTokenResponse):
+    """Detailed authentication response."""
+
+    user: UserProfile = Field(
+        ...,
+        description="Authenticated user profile",
+    )
+
+    subscription: UserPlanData = Field(
+        ...,
+        description="Active subscription details",
+    )

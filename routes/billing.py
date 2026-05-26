@@ -10,14 +10,14 @@ from stripe.checkout import Session
 
 from core.config import settings
 from core.database import get_db
+from enums import PlanName, SubscriptionStatus
 from models.subscription_plan import SubscriptionPlan
 from models.user_subscription import UserSubscription
 from models.users import User
 from schemas.base import BaseResponse
 from schemas.billing import (
+    CreateCheckoutSessionResponse,
     DashboardInvoiceItem,
-    PlanName,
-    SubscriptionStatus,
     UnifiedBillingDashboardData,
 )
 from utils.auth import get_current_user
@@ -35,7 +35,11 @@ router = APIRouter(
 )
 
 
-@router.post("/create-checkout-session")
+@router.post(
+    "/create-checkout-session",
+    status_code=status.HTTP_200_OK,
+    response_model=BaseResponse[CreateCheckoutSessionResponse],
+)
 async def create_checkout_session(
     subscription_id: str,
     current_user: User = Depends(get_current_user),
@@ -114,7 +118,7 @@ async def create_checkout_session(
         return BaseResponse(
             success=True,
             message="Checkout session link built successfully.",
-            data={"checkout_url": session.url},
+            data=CreateCheckoutSessionResponse(checkout_url=session.url),
         )
 
     except Exception as e:
