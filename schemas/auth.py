@@ -63,19 +63,10 @@ class ResetPassword(EmailSchema):
     )
 
 
-class OAuthTokenSchema(BaseSchema):
-    """Reusable OAuth token schema."""
-
-    token: str = Field(
-        ...,
-        description="OAuth provider token",
-    )
-
-
-class GoogleAuthRequest(OAuthTokenSchema):
+class GoogleAuthRequest(BaseSchema):
     """Schema for Google authentication."""
 
-    token: str = Field(
+    id_token: str = Field(
         ...,
         alias="id_token",
         description="Google OAuth ID token",
@@ -83,7 +74,7 @@ class GoogleAuthRequest(OAuthTokenSchema):
     )
 
 
-class LinkedInAuthRequest(OAuthTokenSchema):
+class LinkedInAuthRequest(BaseSchema):
     """Schema for LinkedIn authentication."""
 
     token: str = Field(
