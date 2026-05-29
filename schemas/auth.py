@@ -77,7 +77,7 @@ class GoogleAuthRequest(BaseSchema):
 class LinkedInAuthRequest(BaseSchema):
     """Schema for LinkedIn authentication."""
 
-    token: str = Field(
+    access_token: str = Field(
         ...,
         alias="access_token",
         description="LinkedIn OAuth access token",
