@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from enums import PlanName
 from models.subscription_plan import SubscriptionPlan
@@ -10,9 +11,13 @@ async def fetch_user_subscription(
     db: AsyncSession, user_id: str
 ) -> UserSubscription | None:
     """Fetches the UserSubscription mapping for a given user ID, returning the full SQLAlchemy model instance."""
-    sub_res = await db.execute(
-        select(UserSubscription).filter(UserSubscription.user_id == user_id)
+    stmt = (
+        select(UserSubscription)
+        .filter(UserSubscription.user_id == user_id)
+        .options(selectinload(UserSubscription.plan))
     )
+
+    sub_res = await db.execute(stmt)
     return sub_res.scalars().first()
 
 

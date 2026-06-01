@@ -61,7 +61,8 @@ async def create_checkout_session(
     user_sub = await fetch_user_subscription(db, str(current_user.id))
     if (
         user_sub
-        and user_sub.stripe_subscription_id == subscription_id
+        and user_sub.plan
+        and user_sub.plan.id == subscription_id
         and user_sub.status == SubscriptionStatus.ACTIVE
     ):
         raise HTTPException(
