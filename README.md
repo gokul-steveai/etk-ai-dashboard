@@ -102,7 +102,7 @@ etk/
       "last_name": "Doe"
     },
     "subscription": {
-      "plan_name": "BASIC",
+      "plan_name": "GOLD",
       "max_saved_queries": 100,
       "max_compare_countries": 5,
       "status": "active"
@@ -142,7 +142,7 @@ etk/
   "data": [
     {
       "id": "plan_123",
-      "plan_name": "BASIC",
+      "plan_name": "GOLD",
       "description": "For individual researchers",
       "features": ["100 saved queries", "5 country comparisons"],
       "max_saved_queries": 100,
@@ -198,7 +198,7 @@ etk/
 ### SubscriptionPlan
 ```python
 - id: UUID (Primary Key)
-- name: Enum (FREE, BASIC, INDIVIDUAL, RESEARCHER, ENTERPRISE)
+- name: Enum (FREE, SILVER, GOLD, PLATINUM)
 - description: String
 - features: JSON Array
 - max_saved_queries: Integer

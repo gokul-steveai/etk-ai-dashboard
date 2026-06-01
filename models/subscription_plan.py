@@ -17,9 +17,9 @@ class SubscriptionPlan(Base):
     description = Column(String(255), nullable=True)
 
     # --- Client Quota Fields ---
-    max_saved_queries = Column(Integer, default=0, nullable=False)  # Free=0, Basic=2
+    max_saved_queries = Column(Integer, default=0, nullable=False)  # Free=0, Gold=2
     max_compare_countries = Column(Integer, default=0, nullable=False)
-    max_users = Column(Integer, default=1, nullable=False)  # Basic=1, Enterprise=5+
+    max_users = Column(Integer, default=1, nullable=False)
 
     # --- Client Features ---
     can_export = Column(
