@@ -7,7 +7,7 @@ A robust, production-ready FastAPI backend service for the ETK AI Dashboard plat
 ETK Backend is an enterprise-grade async API built with FastAPI and SQLAlchemy, serving the ETK AI Dashboard frontend. The platform enables users to subscribe to data analysis plans and manage their analytics queries across multiple countries.
 
 **Key Capabilities:**
-- Multi-tier subscription plans (Free, Basic, Individual, Researcher, Enterprise)
+- Multi-tier subscription plans (Free, Silver, Gold, Platinum)
 - Stripe-powered payment processing with webhook support
 - OAuth2 authentication (Google & LinkedIn)
 - Email-based OTP password reset
