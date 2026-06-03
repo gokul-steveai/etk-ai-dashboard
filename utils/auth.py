@@ -1,8 +1,6 @@
 import hashlib
 import random
-import smtplib
 from datetime import datetime, timedelta, timezone
-from email.mime.text import MIMEText
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -107,28 +105,6 @@ def verify_password(plain, hashed):
 def generate_otp():
     """Generates a 6-digit OTP."""
     return str(random.randint(100000, 999999))
-
-
-# Send Email
-def send_email(to_email, otp):
-    """Sends an email with the OTP to the provided email address."""
-
-    subject = "Password Reset OTP"
-    body = f"Your OTP is: {otp}"
-
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = settings.EMAIL_USER
-    msg["To"] = to_email
-
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(settings.EMAIL_USER, settings.EMAIL_PASS)
-        server.sendmail(settings.EMAIL_USER, to_email, msg.as_string())
-        server.quit()
-    except Exception as e:
-        print("Email error:", e)
 
 
 async def generate_auth_response(

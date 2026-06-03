@@ -15,6 +15,24 @@ class EmailSchema(BaseSchema):
     )
 
 
+class OTPRequest(EmailSchema):
+    """Schema for requesting an OTP."""
+
+    pass
+
+
+class OTPVerificationRequest(EmailSchema):
+    """Schema for verifying an OTP."""
+
+    otp: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        description="OTP sent to the user's email",
+        examples=["123456"],
+    )
+
+
 class AuthSchema(EmailSchema):
     """Base authentication schema."""
 
