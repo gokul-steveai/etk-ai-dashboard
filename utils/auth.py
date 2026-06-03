@@ -109,12 +109,8 @@ def generate_otp():
     return str(random.randint(100000, 999999))
 
 
-# Send Email
-def send_email(to_email, otp):
-    """Sends an email with the OTP to the provided email address."""
-
-    subject = "Password Reset OTP"
-    body = f"Your OTP is: {otp}"
+def send_email(to_email: str, subject: str, body: str) -> bool:
+    """Sends an SMTP email using the configured email credentials."""
 
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -127,8 +123,12 @@ def send_email(to_email, otp):
         server.login(settings.EMAIL_USER, settings.EMAIL_PASS)
         server.sendmail(settings.EMAIL_USER, to_email, msg.as_string())
         server.quit()
+
+        print("✅ SMTP Engine Dispatch Success!")
+        return True
     except Exception as e:
-        print("Email error:", e)
+        print("❌ SMTP Engine Dispatch Failure:", e)
+        return False
 
 
 async def generate_auth_response(

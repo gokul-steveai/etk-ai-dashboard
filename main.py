@@ -6,10 +6,13 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.database import Base, engine
-from routes.auth import router as auth_router
-from routes.billing import router as billing_router
-from routes.subscription import router as subscription_router
-from routes.user import router as user_router
+from routes import (
+    auth_router,
+    billing_router,
+    registration_router,
+    subscription_router,
+    user_router,
+)
 
 
 @asynccontextmanager
@@ -30,6 +33,7 @@ app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(subscription_router)
 app.include_router(billing_router)
+app.include_router(registration_router)
 
 
 @app.exception_handler(RequestValidationError)

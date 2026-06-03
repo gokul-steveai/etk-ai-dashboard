@@ -29,6 +29,10 @@ from utils.auth import (
     verify_password,
 )
 from utils.users import find_user_by_email
+from utils.validation import (
+    delete_email_verification_by_email,
+    fetch_existing_otp,
+)
 
 router = APIRouter(tags=["Authentication"])
 
@@ -47,10 +51,27 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists"
         )
 
+    # Check OTP verification for the email before allowing signup
+    email_verification = await fetch_existing_otp(db, user.email)
+    if not email_verification or not email_verification.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email not verified"
+        )
+
     new_user = User(email=user.email, password=hash_password(user.password))
+
     db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
+    try:
+        await db.commit()
+        await db.refresh(new_user)
+        await delete_email_verification_by_email(db, user.email)
+        print("✅ User created successfully!")
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create user: {str(e)}",
+        )
 
     return await generate_auth_response(db, new_user, "Signup successful.")
 
@@ -89,8 +110,17 @@ async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_d
         minutes=5
     )
 
-    await db.commit()
-    send_email(user.email, otp)
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update user: {str(e)}",
+        )
+    send_email(
+        to_email=user.email, subject="Password Reset OTP", body=f"Your OTP is: {otp}"
+    )
 
     return {"message": "OTP sent to your email"}
 
@@ -114,7 +144,10 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
         )
 
     # Check expiry
-    if not user.otp_expiry or datetime.now(timezone.utc) > user.otp_expiry:
+    if (
+        not user.otp_expiry
+        or datetime.now(timezone.utc).replace(tzinfo=None) > user.otp_expiry
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="OTP expired"
         )
