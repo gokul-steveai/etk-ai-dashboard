@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str
     STRIPE_WEBHOOK_SECRET: str | None
 
+    # Application configuration
+    APP_NAME: str = "ETK AI"
+    COMPANY_NAME: str = "ETK AI Inc."
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

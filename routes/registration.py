@@ -5,10 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from schemas.auth import OTPRequest, OTPVerificationRequest
 from schemas.base import BaseResponse
-from utils.auth import generate_otp, send_email
+from services.email import EmailService
+from services.email_templates import REGISTRATION_OTP_BODY
+from utils.auth import generate_otp
 from utils.users import find_user_by_email
 from utils.validation import (
-    fetch_existing_otp,
     is_email_otp_valid,
     save_or_update_email_verification_otp,
     update_email_verification_status,
@@ -30,10 +31,23 @@ async def request_otp(data: OTPRequest, db: AsyncSession = Depends(get_db)):
         )
 
     otp = generate_otp()
+    
+    email_context = {
+        "email_title": "ETK AI Account Verification",
+        "username": data.email.split("@")[0],
+        "otp_code": otp,
+        "expiry_minutes": 5,
+        "fallback_text": f"Your verification validation code is: {otp}. It expires in 5 minutes.",
+    }
 
-    if send_email(
-        to_email=data.email, subject="OTP for Registration", body=f"Your OTP is: {otp}"
-    ):
+    email_sent = await EmailService.send_templated_email(
+        to_email=data.email,
+        subject="Action Required: Verify Email Registry Handshake",
+        body_template=REGISTRATION_OTP_BODY,
+        context=email_context,
+    )
+
+    if email_sent:
         await save_or_update_email_verification_otp(db, data.email, otp)
 
         return BaseResponse(

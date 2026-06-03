@@ -21,11 +21,12 @@ from schemas.auth import (
     UserLogin,
 )
 from schemas.base import BaseResponse
+from services.email import EmailService
+from services.email_templates import PASSWORD_RESET_OTP_BODY
 from utils.auth import (
     generate_auth_response,
     generate_otp,
     hash_password,
-    send_email,
     verify_password,
 )
 from utils.users import find_user_by_email
@@ -112,15 +113,27 @@ async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_d
 
     try:
         await db.commit()
+
+        email_context = {
+            "email_title": "Password Reset Assistance",
+            "username": user.email.split("@")[0],  # Inferred dynamic fallback
+            "otp_code": otp,
+            "expiry_minutes": 5,
+            "fallback_text": f"Your verification code to reset your password is: {otp}. It expires in 5 minutes.",
+        }
+
+        await EmailService.send_templated_email(
+            to_email=user.email,
+            subject="Action Required: Reset Your Account Password",
+            body_template=PASSWORD_RESET_OTP_BODY,
+            context=email_context,
+        )
     except Exception as e:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update user: {str(e)}",
         )
-    send_email(
-        to_email=user.email, subject="Password Reset OTP", body=f"Your OTP is: {otp}"
-    )
 
     return {"message": "OTP sent to your email"}
 
