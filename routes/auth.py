@@ -63,15 +63,17 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
 
     db.add(new_user)
     try:
+        await delete_email_verification_by_email(db, user.email)
         await db.commit()
         await db.refresh(new_user)
-        await delete_email_verification_by_email(db, user.email)
         print("✅ User created successfully!")
     except Exception as e:
         await db.rollback()
+        print(f"❌ User creation failed: {str(e)}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create user: {str(e)}",
+            detail=f"Failed to process request.",
         )
 
     return await generate_auth_response(db, new_user, "Signup successful.")
@@ -122,12 +124,19 @@ async def forgot_password(data: ForgotPassword, db: AsyncSession = Depends(get_d
             "fallback_text": f"Your verification code to reset your password is: {otp}. It expires in 5 minutes.",
         }
 
-        await EmailService.send_templated_email(
+        email_sent = await EmailService.send_templated_email(
             to_email=user.email,
             subject="Action Required: Reset Your Account Password",
             body_template=PASSWORD_RESET_OTP_BODY,
             context=email_context,
         )
+
+        if not email_sent:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send OTP email. Please try again later.",
+            )
+
     except Exception as e:
         await db.rollback()
         raise HTTPException(

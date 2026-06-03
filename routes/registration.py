@@ -31,7 +31,7 @@ async def request_otp(data: OTPRequest, db: AsyncSession = Depends(get_db)):
         )
 
     otp = generate_otp()
-    
+
     email_context = {
         "email_title": "ETK AI Account Verification",
         "username": data.email.split("@")[0],
@@ -40,6 +40,7 @@ async def request_otp(data: OTPRequest, db: AsyncSession = Depends(get_db)):
         "fallback_text": f"Your verification validation code is: {otp}. It expires in 5 minutes.",
     }
 
+    await save_or_update_email_verification_otp(db, data.email, otp)
     email_sent = await EmailService.send_templated_email(
         to_email=data.email,
         subject="Action Required: Verify Email Registry Handshake",
@@ -48,7 +49,6 @@ async def request_otp(data: OTPRequest, db: AsyncSession = Depends(get_db)):
     )
 
     if email_sent:
-        await save_or_update_email_verification_otp(db, data.email, otp)
 
         return BaseResponse(
             success=True,

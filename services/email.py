@@ -1,11 +1,10 @@
+import html
 import smtplib
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from core.config import settings
-
-# Import raw string assets cleanly
 from services.email_templates import BASE_EMAIL_LAYOUT
 
 
@@ -29,17 +28,20 @@ class EmailService:
         # Gather global configurations and custom local context fields
         globals_dict = cls._get_global_context()
         merged_context = {**globals_dict, **custom_context}
+        safe_merged_context = {
+            key: html.escape(str(value)) for key, value in merged_context.items()
+        }
 
         # Render variables inside the specific child body segment
         compiled_body = body_template
-        for key, value in merged_context.items():
+        for key, value in safe_merged_context.items():
             compiled_body = compiled_body.replace(f"{{{key}}}", str(value))
 
         # Replace the {email_body_content} placeholder in the master layout with the fully rendered child body
         final_markup = BASE_EMAIL_LAYOUT.replace("{email_body_content}", compiled_body)
 
         # Fill remaining variables inside the shell layout (title, brand markers, etc.)
-        for key, value in merged_context.items():
+        for key, value in safe_merged_context.items():
             final_markup = final_markup.replace(f"{{{key}}}", str(value))
 
         return final_markup

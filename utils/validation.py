@@ -25,6 +25,7 @@ async def save_or_update_email_verification_otp(
         existing_otp.expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=expires_in_minutes
         )
+        existing_otp.is_verified = False
         await db.commit()
 
         return existing_otp
@@ -45,7 +46,7 @@ async def save_or_update_email_verification_otp(
 async def is_email_otp_valid(db: AsyncSession, email: str, otp: str) -> bool:
     """Checks if the provided OTP is valid for the given email."""
     email_verification = await fetch_existing_otp(db, email)
-    return (
+    return bool(
         email_verification
         and email_verification.otp == otp
         and email_verification.expires_at
