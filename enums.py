@@ -1,16 +1,11 @@
 from enum import Enum
 
 
-class BillingPlan(str, Enum):
-    BASIC = "BASIC"
-
-
 class PlanName(str, Enum):
     FREE = "FREE"
-    BASIC = "BASIC"
-    INDIVIDUAL = "INDIVIDUAL"
-    RESEARCHER = "RESEARCHER"
-    ENTERPRISE = "ENTERPRISE"
+    SILVER = "SILVER"
+    GOLD = "GOLD"
+    PLATINUM = "PLATINUM"
 
 
 class SubscriptionStatus(str, Enum):

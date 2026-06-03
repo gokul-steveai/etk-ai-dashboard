@@ -241,7 +241,9 @@ async def stripe_webhook(
         if event_type == "checkout.session.completed":
             metadata = session_data["metadata"] if "metadata" in session_data else {}
             user_id = metadata["user_id"] if "user_id" in metadata else None
-            plan_name = metadata["plan"] if "plan" in metadata else str(PlanName.BASIC)
+            plan_name = (
+                metadata["plan"] if "plan" in metadata else str(PlanName.SILVER)
+            )  # Default to SILVER if not provided
 
             stripe_customer = (
                 session_data["customer"] if "customer" in session_data else None
