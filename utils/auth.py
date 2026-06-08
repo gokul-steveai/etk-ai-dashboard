@@ -134,6 +134,7 @@ async def generate_auth_response(
                 created_at=user.created_at,
                 id=str(user.id),
                 email=user.email,
+                heatmap_fetch_count=user.heatmap_fetch_count,
             ),
         ),
     )

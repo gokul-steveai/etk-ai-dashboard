@@ -56,6 +56,12 @@ class UserProfileBase(UserNameMixin):
         ],
     )
 
+    heatmap_fetch_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of times heatmap data has been fetched",
+    )
+
     created_at: datetime = Field(
         ...,
         description="User account creation timestamp",

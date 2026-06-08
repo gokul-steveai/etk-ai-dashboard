@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from stripe import Subscription
 
@@ -298,7 +298,35 @@ async def get_current_user_info(
             first_name=current_user.first_name or "",
             last_name=current_user.last_name or "",
             profile_image=current_user.profile_image or "",
+            heatmap_fetch_count=current_user.heatmap_fetch_count,
         ),
+    )
+
+
+@router.get(
+    "/heatmap/count", response_model=BaseResponse[dict], status_code=status.HTTP_200_OK
+)
+async def update_heatmap_count(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Updates the heatmap fetch count for the authenticated user."""
+    await session.execute(
+        update(User)
+        .where(User.id == current_user.id)
+        .values(heatmap_fetch_count=User.heatmap_fetch_count + 1)
+    )
+    await session.commit()
+
+    await session.refresh(current_user)
+
+    return BaseResponse(
+        data={
+            "heatmap_fetch_count": current_user.heatmap_fetch_count,
+            "user_id": str(current_user.id),
+        },
+        success=True,
+        message="Heatmap fetch count updated successfully",
     )
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import CHAR, Column, DateTime, String
+from sqlalchemy import CHAR, Column, DateTime, Integer, String
 from sqlalchemy.orm import relationship
 
 from core.database import Base
@@ -19,6 +19,7 @@ class User(Base):
     otp = Column(String(10), nullable=True)
     otp_expiry = Column(DateTime, nullable=True)
     deleted_at = Column(DateTime, nullable=True, default=None)
+    heatmap_fetch_count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
